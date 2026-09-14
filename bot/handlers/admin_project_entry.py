@@ -32,11 +32,15 @@ router.message.filter(IsAdmin())
 router.callback_query.filter(IsAdmin())
 
 
-@router.callback_query(F.data == "admin:project_entry")
-async def cb_start_project_entry(callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+async def start_project_entry(state: FSMContext, bot: Bot, chat_id: int, *, new: bool = False) -> None:
     await state.clear()
     await state.set_state(AdminProjectEntry.choosing_student)
-    await show_screen(state, bot, callback.message.chat.id, ADMIN_ASK_STUDENT_SEARCH, cancel_keyboard())
+    await show_screen(state, bot, chat_id, ADMIN_ASK_STUDENT_SEARCH, cancel_keyboard(), new=new)
+
+
+@router.callback_query(F.data == "admin:project_entry")
+async def cb_start_project_entry(callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    await start_project_entry(state, bot, callback.message.chat.id)
     await callback.answer()
 
 

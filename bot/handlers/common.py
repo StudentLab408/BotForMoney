@@ -9,6 +9,7 @@ from bot.states.registration import Registration
 from bot.utils.format import h
 from bot.utils.screen import delete_message, show_screen
 from bot.utils.texts import (
+    HELP_ADMIN_SUFFIX,
     HELP_TEXT,
     MAIN_MENU_ADMIN,
     MAIN_MENU_STUDENT,
@@ -18,12 +19,6 @@ from bot.utils.texts import (
 )
 
 router = Router()
-
-BOT_COMMANDS = [
-    ("start", "Регистрация / главное меню"),
-    ("menu", "Быстрый переход в главное меню"),
-    ("help", "Справка"),
-]
 
 
 async def show_main_menu(
@@ -58,10 +53,11 @@ async def cmd_menu(message: Message, state: FSMContext, bot: Bot, current_user: 
 
 
 @router.message(Command("help"))
-async def cmd_help(message: Message, state: FSMContext, bot: Bot, current_user: User | None) -> None:
+async def cmd_help(message: Message, state: FSMContext, bot: Bot, current_user: User | None, is_admin: bool) -> None:
     await delete_message(bot, message.chat.id, message.message_id)
     markup = back_to_main_menu_keyboard() if current_user is not None else None
-    await show_screen(state, bot, message.chat.id, HELP_TEXT, markup, new=True)
+    text = HELP_TEXT + HELP_ADMIN_SUFFIX if is_admin else HELP_TEXT
+    await show_screen(state, bot, message.chat.id, text, markup, new=True)
 
 
 @router.callback_query(F.data.in_({"menu:main", "flow:cancel"}))

@@ -9,6 +9,7 @@ from bot.db.repo import users as users_repo
 from bot.handlers.common import show_main_menu
 from bot.keyboards.common import cancel_keyboard
 from bot.keyboards.student import registration_confirm_keyboard
+from bot.services.commands import set_admin_commands
 from bot.states.registration import Registration
 from bot.utils.format import h
 from bot.utils.input import MAX_GROUP_LEN, MAX_NAME_LEN, read_input, take_state_data
@@ -116,5 +117,7 @@ async def confirm_registration(
     )
     # The middleware computed is_admin before the profile existed, so derive it again.
     is_admin = user.telegram_id == config.super_admin_id or user.role == "admin"
+    if current_user is None and is_admin:
+        await set_admin_commands(bot, user.telegram_id, is_super_admin=True)
     notice = PROFILE_UPDATED if current_user is not None else REGISTRATION_DONE.format(full_name=h(user.full_name))
     await show_main_menu(state, bot, callback.message.chat.id, is_admin, notice=notice)

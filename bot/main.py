@@ -4,12 +4,12 @@ import logging
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ChatType, ParseMode
-from aiogram.types import BotCommand
 
 from bot.config import Config, load_config
-from bot.db.engine import dispose_engine, init_models
+from bot.db.engine import dispose_engine, init_models, session_scope
 from bot.handlers import (
     admin_approval,
+    admin_commands,
     admin_management,
     admin_panel,
     admin_project_entry,
@@ -22,11 +22,14 @@ from bot.handlers import (
 from bot.middlewares.db_session import DbSessionMiddleware
 from bot.middlewares.screen import ScreenAdoptionMiddleware
 from bot.middlewares.user_context import UserContextMiddleware
+from bot.services.commands import set_default_commands, sync_all_admin_commands
 from bot.services.scheduler import setup_scheduler
 
 # Order matters: the first router whose filters match handles the update; fallback must stay last.
+# Command routers come first so commands work even in the middle of a form.
 ROUTERS = [
     common.router,
+    admin_commands.router,
     registration.router,
     student_cabinet.router,
     admin_panel.router,
@@ -73,7 +76,9 @@ async def main() -> None:
     bot = Bot(token=config.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = create_dispatcher(config)
     scheduler = setup_scheduler(bot, config)
-    await bot.set_my_commands([BotCommand(command=cmd, description=desc) for cmd, desc in common.BOT_COMMANDS])
+    await set_default_commands(bot)
+    async with session_scope() as session:
+        await sync_all_admin_commands(bot, session, config)
     await bot.delete_webhook(drop_pending_updates=True)
 
     try:

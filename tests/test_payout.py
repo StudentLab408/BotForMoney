@@ -28,7 +28,6 @@ def test_project_only():
     assert payout.basis_type == "project"
     assert payout.gross == Decimal(200)
     assert payout.withheld == Decimal(50)
-    assert payout.net == Decimal(150)
 
 
 def test_conf_event_under_cap():
@@ -41,7 +40,6 @@ def test_conf_event_under_cap():
     assert payout.pre_cap_total == Decimal("37.5")
     assert payout.gross == Decimal("37.5")
     assert payout.withheld == Decimal(9)  # round(9.375) -> HALF_UP -> 9
-    assert payout.net == Decimal("28.5")
 
 
 def test_conf_event_exceeds_cap():
@@ -73,7 +71,6 @@ def test_no_approved_entries():
     payout = _compute(entries)
     assert payout.basis_type == "none"
     assert payout.gross == Decimal(0)
-    assert payout.net == Decimal(0)
 
 
 def test_rounding_boundary():
@@ -81,7 +78,6 @@ def test_rounding_boundary():
     payout = _compute(entries)
     assert payout.gross == Decimal("87.5")
     assert payout.withheld == Decimal(22)  # 21.875 -> HALF_UP -> 22
-    assert payout.net == Decimal("65.5")
 
 
 def test_format_basis_text_project():

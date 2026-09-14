@@ -10,7 +10,15 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.base import BaseSession
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.base import StorageKey
-from aiogram.methods import AnswerCallbackQuery, DeleteMessage, EditMessageText, SendDocument, SendMessage
+from aiogram.methods import (
+    AnswerCallbackQuery,
+    DeleteMessage,
+    DeleteMyCommands,
+    EditMessageText,
+    SendDocument,
+    SendMessage,
+    SetMyCommands,
+)
 from aiogram.types import CallbackQuery, Chat, Message, Update
 from aiogram.types import User as TgUser
 from sqlalchemy import select
@@ -19,7 +27,7 @@ from bot.config import Config
 from bot.db import engine as db_engine
 from bot.db.models import Supplement, User
 from bot.main import create_dispatcher
-from bot.utils.texts import CARD_ALREADY_PROCESSED_ALERT
+from bot.utils.texts import CARD_ALREADY_PROCESSED_ALERT, EXPORT_CHOOSE_MONTH, REPORT_CHOOSE_MONTH
 
 BOT_ID = 42
 SUPER_ADMIN_ID = 900
@@ -236,3 +244,47 @@ async def test_unregistered_super_admin_has_no_admin_rights(harness):
     screen = await harness.screen_id(STUDENT_ID)
     await harness.press(SUPER_ADMIN_ID, "sup:approve:1:50", screen)
     assert harness.session.of(AnswerCallbackQuery)[-1].show_alert  # handled by fallback, no crash
+
+
+def _commands_for(calls: FakeSession, chat_id: int) -> list[str]:
+    scoped = [c for c in calls.of(SetMyCommands) if c.scope is not None and c.scope.chat_id == chat_id]
+    return [command.command for command in scoped[-1].commands] if scoped else []
+
+
+async def test_admin_commands_are_scoped_to_admins_and_follow_role_changes(harness):
+    calls = harness.session
+    await harness.register(SUPER_ADMIN_ID, "Админов")
+    await harness.register(STUDENT_ID, "Студентов")
+
+    assert {"start", "admin", "report", "export", "admins"} <= set(_commands_for(calls, SUPER_ADMIN_ID))
+    assert _commands_for(calls, STUDENT_ID) == [], "students keep the default list"
+
+    screen = await harness.screen_id(SUPER_ADMIN_ID)
+    await harness.press(SUPER_ADMIN_ID, "admin:manage_admins", screen)
+    await harness.press(SUPER_ADMIN_ID, "admin:promote_start", screen)
+    await harness.send(SUPER_ADMIN_ID, str(STUDENT_ID))
+    await harness.press(SUPER_ADMIN_ID, "admin:promote_confirm", screen)
+
+    promoted = set(_commands_for(calls, STUDENT_ID))
+    assert {"admin", "report", "export"} <= promoted and "admins" not in promoted
+
+    student = await harness.user(STUDENT_ID)
+    await harness.press(SUPER_ADMIN_ID, f"admin:demote:{student.id}", screen)
+    assert any(c.scope.chat_id == STUDENT_ID for c in calls.of(DeleteMyCommands))
+
+
+async def test_admin_command_works_mid_form_and_is_ignored_for_students(harness):
+    calls = harness.session
+    await harness.register(SUPER_ADMIN_ID, "Админов")
+    await harness.register(STUDENT_ID, "Студентов")
+
+    screen = await harness.screen_id(SUPER_ADMIN_ID)
+    await harness.press(SUPER_ADMIN_ID, "menu:submit", screen)
+    await harness.press(SUPER_ADMIN_ID, "submit_type:event", screen)
+    await harness.send(SUPER_ADMIN_ID, "/export")
+    last_admin_screen = [m for m, _ in calls.sent if isinstance(m, SendMessage) and m.chat_id == SUPER_ADMIN_ID][-1]
+    assert last_admin_screen.text == EXPORT_CHOOSE_MONTH
+
+    await harness.send(STUDENT_ID, "/report")
+    student_texts = [m.text for m in calls.of(SendMessage) + calls.of(EditMessageText) if m.chat_id == STUDENT_ID]
+    assert REPORT_CHOOSE_MONTH not in student_texts

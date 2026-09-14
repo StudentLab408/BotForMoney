@@ -68,11 +68,13 @@ async def show_long_screen(
     chat_id: int,
     text: str,
     reply_markup: InlineKeyboardMarkup | None = None,
+    *,
+    new: bool = False,
 ) -> None:
     """Like show_screen, but text over the Telegram limit is split; extra parts are cleaned up later."""
     chunks = split_message(text)
     if len(chunks) == 1:
-        await show_screen(state, bot, chat_id, text, reply_markup)
+        await show_screen(state, bot, chat_id, text, reply_markup, new=new)
         return
 
     ui = _ui_context(state)

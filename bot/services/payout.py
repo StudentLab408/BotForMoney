@@ -24,7 +24,6 @@ class StudentMonthPayout:
     pre_cap_total: Decimal
     gross: Decimal
     withheld: Decimal
-    net: Decimal
     basis_entries: list[SupplementRow]
 
 
@@ -55,14 +54,12 @@ def compute_student_month_payout(
         pre_cap_total = Decimal(0)
 
     withheld = (gross * withhold_rate).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
-    net = gross - withheld
 
     return StudentMonthPayout(
         basis_type=basis_type,
         pre_cap_total=pre_cap_total,
         gross=gross,
         withheld=withheld,
-        net=net,
         basis_entries=basis_entries,
     )
 

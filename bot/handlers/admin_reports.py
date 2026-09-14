@@ -79,17 +79,30 @@ async def _run_for_month(
     await show_admin_menu(state, bot, chat_id, is_super_admin, notice=notice, new=True)
 
 
-@router.callback_query(F.data == "admin:report")
-async def cb_report_start(callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+async def open_month_picker(state: FSMContext, bot: Bot, chat_id: int, purpose: str, *, new: bool = False) -> None:
     await state.clear()
-    await show_screen(state, bot, callback.message.chat.id, REPORT_CHOOSE_MONTH, month_picker_keyboard("report"))
-    await callback.answer()
+    text = REPORT_CHOOSE_MONTH if purpose == "report" else EXPORT_CHOOSE_MONTH
+    await show_screen(state, bot, chat_id, text, month_picker_keyboard(purpose), new=new)
 
 
-@router.callback_query(F.data == "admin:export")
-async def cb_export_start(callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+async def show_activity(state: FSMContext, bot: Bot, chat_id: int, session: AsyncSession, *, new: bool = False) -> None:
     await state.clear()
-    await show_screen(state, bot, callback.message.chat.id, EXPORT_CHOOSE_MONTH, month_picker_keyboard("export"))
+    report = await build_student_activity_report(session)
+    text = (
+        "👥 <b>Активность студентов</b> (за всё время)\n\n"
+        f"📁 <b>Есть проектная надбавка ({len(report.with_projects)}):</b>\n"
+        f"{_format_names(report.with_projects)}\n\n"
+        f"🏛 <b>Только конф./мероприятия ({len(report.with_conf_event_only)}):</b>\n"
+        f"{_format_names(report.with_conf_event_only)}\n\n"
+        f"😴 <b>Нет ни одной заявки ({len(report.with_no_activity)}):</b>\n"
+        f"{_format_names(report.with_no_activity)}"
+    )
+    await show_long_screen(state, bot, chat_id, text, back_to_admin_menu_keyboard(), new=new)
+
+
+@router.callback_query(F.data.in_({"admin:report", "admin:export"}))
+async def cb_month_picker(callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    await open_month_picker(state, bot, callback.message.chat.id, callback.data.removeprefix("admin:"))
     await callback.answer()
 
 
@@ -145,14 +158,4 @@ async def process_custom_month(
 @router.callback_query(F.data == "admin:activity")
 async def cb_activity(callback: CallbackQuery, state: FSMContext, bot: Bot, session: AsyncSession) -> None:
     await callback.answer()
-    report = await build_student_activity_report(session)
-    text = (
-        "👥 <b>Активность студентов</b> (за всё время)\n\n"
-        f"📁 <b>Есть проектная надбавка ({len(report.with_projects)}):</b>\n"
-        f"{_format_names(report.with_projects)}\n\n"
-        f"🏛 <b>Только конф./мероприятия ({len(report.with_conf_event_only)}):</b>\n"
-        f"{_format_names(report.with_conf_event_only)}\n\n"
-        f"😴 <b>Нет ни одной заявки ({len(report.with_no_activity)}):</b>\n"
-        f"{_format_names(report.with_no_activity)}"
-    )
-    await show_long_screen(state, bot, callback.message.chat.id, text, back_to_admin_menu_keyboard())
+    await show_activity(state, bot, callback.message.chat.id, session)
