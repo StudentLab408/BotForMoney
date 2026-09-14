@@ -1,14 +1,19 @@
 import datetime as dt
 from zoneinfo import ZoneInfo
 
-MONTH_NAMES_RU = [
-    "января", "февраля", "марта", "апреля", "мая", "июня",
-    "июля", "августа", "сентября", "октября", "ноября", "декабря",
-]
-
-MONTH_NAMES_RU_NOMINATIVE = [
-    "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
-    "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь",
+MONTH_NAMES = [
+    "январь",
+    "февраль",
+    "март",
+    "апрель",
+    "май",
+    "июнь",
+    "июль",
+    "август",
+    "сентябрь",
+    "октябрь",
+    "ноябрь",
+    "декабрь",
 ]
 
 
@@ -27,12 +32,15 @@ def previous_period(year: int, month: int) -> tuple[int, int]:
     return year, month - 1
 
 
-def month_name_genitive(month: int) -> str:
-    return MONTH_NAMES_RU[month - 1]
+def month_name(month: int) -> str:
+    return MONTH_NAMES[month - 1]
 
 
-def month_name_nominative(month: int) -> str:
-    return MONTH_NAMES_RU_NOMINATIVE[month - 1]
+def format_datetime(moment: dt.datetime, timezone: str) -> str:
+    """Format a timestamp in the configured zone; naive values are treated as UTC (how SQLite stores them)."""
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=dt.UTC)
+    return moment.astimezone(ZoneInfo(timezone)).strftime("%d.%m.%Y %H:%M")
 
 
 def parse_month_string(raw: str) -> tuple[int, int] | None:

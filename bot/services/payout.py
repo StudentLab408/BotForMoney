@@ -2,6 +2,8 @@ from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Literal, Protocol
 
+from bot.utils.format import money
+
 
 class SupplementRow(Protocol):
     type: str
@@ -75,9 +77,10 @@ def format_basis_text(payout: StudentMonthPayout) -> str:
     if payout.basis_type == "conf_event":
         parts = []
         for e in payout.basis_entries:
+            amount = money(e.amount or Decimal(0))
             if e.type == "conference":
-                parts.append(f"Конференция «{e.conference_name}» ({e.amount} BYN)")
+                parts.append(f"Конференция «{e.conference_name}» ({amount} BYN)")
             else:
-                parts.append(f"Мероприятие «{e.event_name}» ({e.amount} BYN)")
+                parts.append(f"Мероприятие «{e.event_name}» ({amount} BYN)")
         return "; ".join(parts)
     return ""

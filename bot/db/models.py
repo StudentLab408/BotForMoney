@@ -2,7 +2,7 @@ import datetime as dt
 from decimal import Decimal
 
 from sqlalchemy import DateTime, ForeignKey, Index, Numeric, String, Text, func
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
 class Base(DeclarativeBase):
@@ -21,9 +21,7 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(20), default="student")  # 'student' | 'admin'
 
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, server_default=func.now())
-    updated_at: Mapped[dt.datetime] = mapped_column(
-        DateTime, server_default=func.now(), onupdate=func.now()
-    )
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
     @property
     def full_name(self) -> str:
@@ -56,11 +54,7 @@ class Supplement(Base):
     reject_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, server_default=func.now())
-    updated_at: Mapped[dt.datetime] = mapped_column(
-        DateTime, server_default=func.now(), onupdate=func.now()
-    )
-
-    student: Mapped["User"] = relationship(foreign_keys=[student_id])
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
     __table_args__ = (
         Index("ix_supplements_student_period_status", "student_id", "period_year", "period_month", "status"),

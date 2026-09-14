@@ -10,7 +10,33 @@ PURPOSE_TEMPLATE = (
     "подготовки к образовательным конкурсам за {month_name} {year} г."
 )
 
-TABLE_HEADERS = ["№", "Фамилия", "Имя", "Отчество", "Группа", "Сумма", "Основание"]
+FONT_NAME = "Times New Roman"
+FONT_SIZE_PT = 12
 
-# Column widths in twips (1440 twips = 1 inch), tuned for A4 portrait with standard margins.
-COLUMN_WIDTHS_TWIPS = [600, 1600, 1400, 1600, 1400, 900, 3500]
+# A4 in twips (1440 twips = 1 inch); 2 cm margins leave 9638 (portrait) / 14570 (landscape) for the table.
+A4_SHORT_SIDE_TWIPS = 11906
+A4_LONG_SIDE_TWIPS = 16838
+PAGE_MARGIN_TWIPS = 1134
+
+# (header, width) — widths add up to the usable page width.
+OFFICIAL_COLUMNS = [
+    ("№", 600),
+    ("Фамилия", 2200),
+    ("Имя", 1800),
+    ("Отчество", 2200),
+    ("Группа", 1638),
+    ("Сумма", 1200),
+]
+
+INTERNAL_COLUMNS = [
+    ("№", 600),
+    ("Фамилия", 1900),
+    ("Имя", 1600),
+    ("Отчество", 1900),
+    ("Группа", 1500),
+    ("Сумма", 1100),
+    ("25% в лабу", 1100),
+    ("Основание", 4870),
+]
+
+TOTAL_LABEL = "Итого"

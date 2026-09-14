@@ -90,9 +90,7 @@ async def get(session: AsyncSession, supplement_id: int) -> Supplement | None:
     return await session.get(Supplement, supplement_id)
 
 
-async def approve(
-    session: AsyncSession, supplement_id: int, amount: Decimal, admin_id: int
-) -> bool:
+async def approve(session: AsyncSession, supplement_id: int, amount: Decimal, admin_id: int) -> bool:
     """Atomically approve a pending supplement, setting its amount. Returns False if already handled."""
     result = await session.execute(
         update(Supplement)
@@ -108,9 +106,7 @@ async def approve(
     return result.rowcount > 0
 
 
-async def reject(
-    session: AsyncSession, supplement_id: int, admin_id: int, reason: str | None
-) -> bool:
+async def reject(session: AsyncSession, supplement_id: int, admin_id: int, reason: str | None) -> bool:
     result = await session.execute(
         update(Supplement)
         .where(Supplement.id == supplement_id, Supplement.status == "pending")
@@ -125,32 +121,25 @@ async def reject(
     return result.rowcount > 0
 
 
-async def list_for_student_month(
-    session: AsyncSession, student_id: int, period_year: int, period_month: int
-) -> list[Supplement]:
+async def list_approved_for_month(session: AsyncSession, period_year: int, period_month: int) -> list[Supplement]:
     result = await session.execute(
         select(Supplement).where(
-            Supplement.student_id == student_id,
             Supplement.period_year == period_year,
             Supplement.period_month == period_month,
+            Supplement.status == "approved",
         )
     )
     return list(result.scalars().all())
 
 
-async def list_students_with_activity(
-    session: AsyncSession, period_year: int, period_month: int
-) -> list[int]:
+async def list_for_student(session: AsyncSession, student_id: int, limit: int) -> list[Supplement]:
     result = await session.execute(
-        select(Supplement.student_id)
-        .where(
-            Supplement.period_year == period_year,
-            Supplement.period_month == period_month,
-            Supplement.status == "approved",
-        )
-        .distinct()
+        select(Supplement)
+        .where(Supplement.student_id == student_id)
+        .order_by(Supplement.created_at.desc(), Supplement.id.desc())
+        .limit(limit)
     )
-    return [row[0] for row in result.all()]
+    return list(result.scalars().all())
 
 
 async def list_student_activity_types(session: AsyncSession) -> dict[int, set[str]]:

@@ -3,7 +3,10 @@ venv/
 __pycache__/
 *.pyc
 .pytest_cache/
+.ruff_cache/
 .git/
+.claude/
 data/
 .env
 tests/
+docs/

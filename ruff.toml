@@ -1,0 +1,7 @@
+line-length = 120
+target-version = "py312"
+
+[lint]
+select = ["F", "E", "W", "I", "B", "UP", "SIM", "RUF"]
+# Russian UI text legitimately contains Cyrillic letters that look like Latin ones.
+ignore = ["RUF001", "RUF002", "RUF003"]

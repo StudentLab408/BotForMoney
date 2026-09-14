@@ -3,18 +3,19 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.config import ALLOWED_CONF_EVENT_AMOUNTS
 from bot.db.models import User
-from bot.utils.texts import BACK_BUTTON, CANCEL_BUTTON, CONFIRM_BUTTON, SKIP_BUTTON
+from bot.utils.format import money
+from bot.utils.texts import BACK_BUTTON, CANCEL_BUTTON, CONFIRM_BUTTON, MAIN_MENU_BUTTON, SKIP_BUTTON
 
 
 def admin_menu_keyboard(is_super_admin: bool) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="➕ Начислить проектную надбавку", callback_data="admin:project_entry")
     builder.button(text="📊 Отчёт за месяц", callback_data="admin:report")
-    builder.button(text="📄 Сформировать список", callback_data="admin:export")
+    builder.button(text="📄 Сформировать списки", callback_data="admin:export")
     builder.button(text="👥 Активность студентов", callback_data="admin:activity")
     if is_super_admin:
         builder.button(text="👑 Управление админами", callback_data="admin:manage_admins")
-    builder.button(text="⬅️ В главное меню", callback_data="menu:main")
+    builder.button(text=MAIN_MENU_BUTTON, callback_data="menu:main")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -22,7 +23,7 @@ def admin_menu_keyboard(is_super_admin: bool) -> InlineKeyboardMarkup:
 def approval_keyboard(supplement_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for amount in ALLOWED_CONF_EVENT_AMOUNTS:
-        builder.button(text=f"✅ {amount} BYN", callback_data=f"sup:approve:{supplement_id}:{amount}")
+        builder.button(text=f"✅ {money(amount)} BYN", callback_data=f"sup:approve:{supplement_id}:{amount}")
     builder.button(text="❌ Отклонить", callback_data=f"sup:reject:{supplement_id}")
     builder.adjust(3, 1)
     return builder.as_markup()
@@ -31,6 +32,8 @@ def approval_keyboard(supplement_id: int) -> InlineKeyboardMarkup:
 def reject_reason_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text=SKIP_BUTTON, callback_data="reject:skip")
+    builder.button(text=CANCEL_BUTTON, callback_data="flow:cancel")
+    builder.adjust(2)
     return builder.as_markup()
 
 
@@ -41,23 +44,15 @@ def student_search_results_keyboard(students: list[User]) -> InlineKeyboardMarku
             text=f"{s.last_name} {s.first_name} ({s.group_number})",
             callback_data=f"admin:pick_student:{s.id}",
         )
-    builder.button(text=CANCEL_BUTTON, callback_data="admin:cancel_project_entry")
+    builder.button(text=CANCEL_BUTTON, callback_data="flow:cancel")
     builder.adjust(1)
     return builder.as_markup()
 
 
-def project_confirm_keyboard() -> InlineKeyboardMarkup:
+def confirm_keyboard(confirm_cb: str) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text=CONFIRM_BUTTON, callback_data="admin:project_confirm")
-    builder.button(text=CANCEL_BUTTON, callback_data="admin:cancel_project_entry")
-    builder.adjust(2)
-    return builder.as_markup()
-
-
-def promote_confirm_keyboard(target_id: int) -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    builder.button(text=CONFIRM_BUTTON, callback_data=f"admin:promote_confirm:{target_id}")
-    builder.button(text=CANCEL_BUTTON, callback_data="admin:promote_cancel")
+    builder.button(text=CONFIRM_BUTTON, callback_data=confirm_cb)
+    builder.button(text=CANCEL_BUTTON, callback_data="flow:cancel")
     builder.adjust(2)
     return builder.as_markup()
 

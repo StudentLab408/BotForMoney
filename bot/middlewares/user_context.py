@@ -20,18 +20,19 @@ class UserContextMiddleware(BaseMiddleware):
     ) -> Any:
         telegram_id: int | None = None
         if isinstance(event, Update):
-            if event.message is not None:
-                telegram_id = event.message.from_user.id if event.message.from_user else None
+            if event.message is not None and event.message.from_user is not None:
+                telegram_id = event.message.from_user.id
             elif event.callback_query is not None:
                 telegram_id = event.callback_query.from_user.id
 
-        session = data["session"]
         current_user = None
         if telegram_id is not None:
-            current_user = await users_repo.get_by_telegram_id(session, telegram_id)
+            current_user = await users_repo.get_by_telegram_id(data["session"], telegram_id)
 
+        # Admin rights require a profile: admin handlers rely on current_user (e.g. reviewer id).
+        registered = current_user is not None
         data["current_user"] = current_user
-        data["is_super_admin"] = telegram_id == self.config.super_admin_id
-        data["is_admin"] = data["is_super_admin"] or (current_user is not None and current_user.role == "admin")
+        data["is_super_admin"] = registered and telegram_id == self.config.super_admin_id
+        data["is_admin"] = data["is_super_admin"] or (registered and current_user.role == "admin")
 
         return await handler(event, data)

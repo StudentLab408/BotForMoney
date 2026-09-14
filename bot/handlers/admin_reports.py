@@ -4,110 +4,155 @@ from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.config import Config
+from bot.db.models import User
 from bot.filters.roles import IsAdmin
-from bot.handlers.admin_export import send_export_for_month
+from bot.handlers.admin_panel import show_admin_menu
 from bot.keyboards.admin import back_to_admin_menu_keyboard, month_picker_keyboard
-from bot.services.reporting import MonthReport, StudentActivityReport, build_month_report, build_student_activity_report
+from bot.services.list_delivery import send_monthly_lists
+from bot.services.reporting import MonthReport, build_doc_rows, build_month_report, build_student_activity_report
 from bot.states.report_month import ReportMonth
-from bot.utils.texts import ASK_CUSTOM_MONTH, INVALID_MONTH_FORMAT, REPORT_CHOOSE_MONTH
-from bot.utils.time import current_period, month_name_nominative, parse_month_string, previous_period
+from bot.utils.format import h, money
+from bot.utils.input import read_input
+from bot.utils.screen import show_long_screen, show_screen
+from bot.utils.texts import (
+    ASK_CUSTOM_MONTH,
+    EXPORT_CHOOSE_MONTH,
+    EXPORT_EMPTY,
+    EXPORT_SENT,
+    INVALID_MONTH_FORMAT,
+    REPORT_CHOOSE_MONTH,
+)
+from bot.utils.time import current_period, month_name, parse_month_string, previous_period
 
 router = Router()
 router.message.filter(IsAdmin())
 router.callback_query.filter(IsAdmin())
 
 
-def _format_report(report: MonthReport) -> str:
-    month_name = month_name_nominative(report.month)
+def _format_report(report: MonthReport, config: Config) -> str:
     lines = [
-        f"📊 <b>Отчёт за {month_name} {report.year}</b>",
+        f"📊 <b>Отчёт за {month_name(report.month)} {report.year}</b>",
         "",
-        f"👥 Студентов с начислением: {report.student_count}",
-        f"💰 Итого начислено (net): {report.total_net} BYN",
-        f"🏦 Удержано в фонд лаборатории: {report.total_withheld} BYN",
-        f"💵 Итого gross: {report.total_gross} BYN",
+        f"👥 Студентов с начислениями: {report.student_count}",
+        f"💰 Итого начислено: {money(report.total_amount)} BYN",
         "",
-        f"📁 Проекты: {report.project_count} шт. — {report.project_gross} BYN",
-        f"🏛 Конференции: {report.conference_count} шт. — {report.conference_gross} BYN",
-        f"🎪 Мероприятия: {report.event_count} шт. — {report.event_gross} BYN",
+        f"📁 Проекты: {report.project_count} — {money(report.project_amount)} BYN",
+        f"🏛 Конференции: {report.conference_count} — {money(report.conference_amount)} BYN",
+        f"🎪 Мероприятия: {report.event_count} — {money(report.event_amount)} BYN",
     ]
     if report.students_capped:
-        lines.append(f"\n⚠️ Студентов, у кого сумма урезана лимитом 200 BYN: {report.students_capped}")
+        lines += ["", f"⚠️ Упёрлись в лимит {money(config.monthly_cap)} BYN: {report.students_capped}"]
     return "\n".join(lines)
 
 
-def _format_activity(report: StudentActivityReport) -> str:
-    def _names(users: list) -> str:
-        if not users:
-            return "— никого —"
-        return "\n".join(f"• {u.last_name} {u.first_name} ({u.group_number})" for u in users)
-
-    return (
-        "👥 <b>Активность студентов</b> (за всё время)\n\n"
-        f"📁 <b>Есть проектная надбавка ({len(report.with_projects)}):</b>\n{_names(report.with_projects)}\n\n"
-        f"🏛 <b>Только конф./мероприятия ({len(report.with_conf_event_only)}):</b>\n{_names(report.with_conf_event_only)}\n\n"
-        f"😴 <b>Нет ни одной заявки ({len(report.with_no_activity)}):</b>\n{_names(report.with_no_activity)}"
-    )
+def _format_names(users: list[User]) -> str:
+    if not users:
+        return "— никого —"
+    return "\n".join(f"• {h(u.last_name)} {h(u.first_name)} ({h(u.group_number)})" for u in users)
 
 
-async def send_report_for_month(
-    bot: Bot, session: AsyncSession, config: Config, chat_id: int, year: int, month: int
+async def _run_for_month(
+    purpose: str,
+    state: FSMContext,
+    bot: Bot,
+    chat_id: int,
+    session: AsyncSession,
+    config: Config,
+    is_super_admin: bool,
+    year: int,
+    month: int,
 ) -> None:
-    report = await build_month_report(session, config, year, month)
-    await bot.send_message(chat_id, _format_report(report), reply_markup=back_to_admin_menu_keyboard())
+    if purpose == "report":
+        report = await build_month_report(session, config, year, month)
+        await show_screen(state, bot, chat_id, _format_report(report, config), back_to_admin_menu_keyboard())
+        return
+
+    rows = await build_doc_rows(session, config, year, month)
+    name = month_name(month)
+    if not rows:
+        notice = EXPORT_EMPTY.format(month_name=name, year=year)
+        await show_admin_menu(state, bot, chat_id, is_super_admin, notice=notice)
+        return
+    await send_monthly_lists(bot, chat_id, year, month, rows)
+    # new=True moves the menu below the files that were just sent.
+    notice = EXPORT_SENT.format(month_name=name, year=year)
+    await show_admin_menu(state, bot, chat_id, is_super_admin, notice=notice, new=True)
 
 
 @router.callback_query(F.data == "admin:report")
-async def cb_report_start(callback: CallbackQuery, state: FSMContext) -> None:
+async def cb_report_start(callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     await state.clear()
-    await callback.message.edit_text(REPORT_CHOOSE_MONTH, reply_markup=month_picker_keyboard("report"))
+    await show_screen(state, bot, callback.message.chat.id, REPORT_CHOOSE_MONTH, month_picker_keyboard("report"))
     await callback.answer()
 
 
-@router.callback_query(F.data == "month:report:current")
-async def cb_report_current(callback: CallbackQuery, session: AsyncSession, config: Config, bot: Bot) -> None:
+@router.callback_query(F.data == "admin:export")
+async def cb_export_start(callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    await state.clear()
+    await show_screen(state, bot, callback.message.chat.id, EXPORT_CHOOSE_MONTH, month_picker_keyboard("export"))
+    await callback.answer()
+
+
+@router.callback_query(F.data.regexp(r"^month:(report|export):(current|previous|custom)$"))
+async def cb_month(
+    callback: CallbackQuery,
+    state: FSMContext,
+    bot: Bot,
+    session: AsyncSession,
+    config: Config,
+    is_super_admin: bool,
+) -> None:
+    _, purpose, option = callback.data.split(":")
+    chat_id = callback.message.chat.id
+    await callback.answer()
+
+    if option == "custom":
+        await state.set_state(ReportMonth.waiting_custom_month)
+        await state.update_data(purpose=purpose)
+        await show_screen(state, bot, chat_id, ASK_CUSTOM_MONTH, back_to_admin_menu_keyboard())
+        return
+
     year, month = current_period(config.timezone)
-    await send_report_for_month(bot, session, config, callback.message.chat.id, year, month)
-    await callback.answer()
-
-
-@router.callback_query(F.data == "month:report:previous")
-async def cb_report_previous(callback: CallbackQuery, session: AsyncSession, config: Config, bot: Bot) -> None:
-    year, month = previous_period(*current_period(config.timezone))
-    await send_report_for_month(bot, session, config, callback.message.chat.id, year, month)
-    await callback.answer()
-
-
-@router.callback_query(F.data == "month:report:custom")
-async def cb_report_custom(callback: CallbackQuery, state: FSMContext) -> None:
-    await state.set_state(ReportMonth.waiting_custom_month)
-    await state.update_data(purpose="report")
-    await callback.message.edit_text(ASK_CUSTOM_MONTH)
-    await callback.answer()
+    if option == "previous":
+        year, month = previous_period(year, month)
+    await _run_for_month(purpose, state, bot, chat_id, session, config, is_super_admin, year, month)
 
 
 @router.message(ReportMonth.waiting_custom_month)
 async def process_custom_month(
-    message: Message, state: FSMContext, session: AsyncSession, config: Config, bot: Bot
+    message: Message,
+    state: FSMContext,
+    bot: Bot,
+    session: AsyncSession,
+    config: Config,
+    is_super_admin: bool,
 ) -> None:
-    parsed = parse_month_string(message.text)
+    raw = await read_input(message, state, 20, ASK_CUSTOM_MONTH, back_to_admin_menu_keyboard())
+    if raw is None:
+        return
+    parsed = parse_month_string(raw)
     if parsed is None:
-        await message.answer(INVALID_MONTH_FORMAT)
+        text = f"{INVALID_MONTH_FORMAT}\n\n{ASK_CUSTOM_MONTH}"
+        await show_screen(state, bot, message.chat.id, text, back_to_admin_menu_keyboard())
         return
 
-    year, month = parsed
-    data = await state.get_data()
-    purpose = data.get("purpose", "report")
+    purpose = (await state.get_data()).get("purpose", "report")
     await state.clear()
-
-    if purpose == "export":
-        await send_export_for_month(bot, session, config, message.chat.id, year, month)
-    else:
-        await send_report_for_month(bot, session, config, message.chat.id, year, month)
+    year, month = parsed
+    await _run_for_month(purpose, state, bot, message.chat.id, session, config, is_super_admin, year, month)
 
 
 @router.callback_query(F.data == "admin:activity")
-async def cb_activity(callback: CallbackQuery, session: AsyncSession) -> None:
-    report = await build_student_activity_report(session)
-    await callback.message.edit_text(_format_activity(report), reply_markup=back_to_admin_menu_keyboard())
+async def cb_activity(callback: CallbackQuery, state: FSMContext, bot: Bot, session: AsyncSession) -> None:
     await callback.answer()
+    report = await build_student_activity_report(session)
+    text = (
+        "👥 <b>Активность студентов</b> (за всё время)\n\n"
+        f"📁 <b>Есть проектная надбавка ({len(report.with_projects)}):</b>\n"
+        f"{_format_names(report.with_projects)}\n\n"
+        f"🏛 <b>Только конф./мероприятия ({len(report.with_conf_event_only)}):</b>\n"
+        f"{_format_names(report.with_conf_event_only)}\n\n"
+        f"😴 <b>Нет ни одной заявки ({len(report.with_no_activity)}):</b>\n"
+        f"{_format_names(report.with_no_activity)}"
+    )
+    await show_long_screen(state, bot, callback.message.chat.id, text, back_to_admin_menu_keyboard())
