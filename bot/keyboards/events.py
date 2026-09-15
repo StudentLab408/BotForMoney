@@ -4,7 +4,7 @@ from aiogram.types import InlineKeyboardMarkup
 
 from bot.db.models import Event
 from bot.keyboards.builders import button, markup, pagination_row, short
-from bot.utils.texts import ADD_NEW_BUTTON, CANCEL_BUTTON, SEARCH_BUTTON
+from bot.utils.texts import ADD_NEW_BUTTON, CANCEL_BUTTON, PARTICIPATION_TEXT, SEARCH_BUTTON
 
 
 def event_button_text(event: Event) -> str:
@@ -21,3 +21,11 @@ def event_picker_keyboard(
         [button(SEARCH_BUTTON, f"{prefix}:q"), button(ADD_NEW_BUTTON, f"{prefix}:new")],
         [button(CANCEL_BUTTON, cancel_cb)],
     )
+
+
+def participation_row(prefix: str) -> list:
+    """📄 Статья / 📝 Тезисы / 📁 Проект — how the student took part in a conference."""
+    return [
+        button(f"{words['icon']} {words['label']}", f"{prefix}:w:{participation}")
+        for participation, words in PARTICIPATION_TEXT.items()
+    ]

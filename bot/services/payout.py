@@ -5,6 +5,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Literal
 
 from bot.utils.format import money
+from bot.utils.texts import PARTICIPATION_TEXT
 
 BasisType = Literal["project", "conf_event", "none"]
 KIND_LABELS = {"conference": "Конференция", "event": "Мероприятие"}
@@ -21,6 +22,17 @@ class AwardBasis:
     kind: str
     event_name: str
     amount: Decimal
+    participation: str | None = None
+    work_title: str | None = None
+
+    def describe(self) -> str:
+        """'Конференция «IEEE» — статья «Title» (25 BYN)'."""
+        text = f"{KIND_LABELS.get(self.kind, self.kind)} «{self.event_name}»"
+        if self.participation:
+            text += f" — {PARTICIPATION_TEXT[self.participation]['lower']}"
+            if self.work_title:
+                text += f" «{self.work_title}»"
+        return f"{text} ({money(self.amount)} BYN)"
 
 
 @dataclass
@@ -61,7 +73,5 @@ def format_basis_text(payout: StudentMonthPayout) -> str:
     if payout.basis_type == "project":
         return "; ".join(f"Проект «{p.name}»" + (f", {p.regalia}" if p.regalia else "") for p in payout.projects)
     if payout.basis_type == "conf_event":
-        return "; ".join(
-            f"{KIND_LABELS.get(a.kind, a.kind)} «{a.event_name}» ({money(a.amount)} BYN)" for a in payout.awards
-        )
+        return "; ".join(a.describe() for a in payout.awards)
     return ""

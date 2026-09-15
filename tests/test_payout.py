@@ -60,3 +60,18 @@ def test_basis_text():
         awards=[AwardBasis("conference", "ConfA", Decimal(25)), AwardBasis("event", "EvB", Decimal("12.5"))]
     )
     assert format_basis_text(awards) == "Конференция «ConfA» (25 BYN); Мероприятие «EvB» (12,5 BYN)"
+
+
+def test_basis_text_includes_conference_participation():
+    payout = _compute(
+        awards=[
+            AwardBasis("conference", "IEEE", Decimal(25), "article", "Манипулятор"),
+            AwardBasis("conference", "Наука", Decimal("12.5"), "theses", "SLAM"),
+            AwardBasis("conference", "Старая", Decimal(25)),
+        ]
+    )
+    assert format_basis_text(payout) == (
+        "Конференция «IEEE» — статья «Манипулятор» (25 BYN); "
+        "Конференция «Наука» — тезисы «SLAM» (12,5 BYN); "
+        "Конференция «Старая» (25 BYN)"
+    )

@@ -113,3 +113,31 @@ def test_unique_index_migration_closes_existing_duplicates(tmp_path):
         members = dict(conn.execute("SELECT id, end_period FROM project_members"))
     assert statuses == {1: "withdrawn", 2: "approved", 3: "cancelled", 4: "rejected"}
     assert members == {1: None, 2: 101}
+
+
+def test_participation_migration_keeps_old_project_names(tmp_path):
+    db_path = tmp_path / "old.db"
+    config = alembic_config(str(db_path))
+    command.upgrade(config, "0003")
+    with closing(sqlite3.connect(db_path)) as conn:
+        conn.execute(
+            "INSERT INTO users (id, telegram_id, last_name, first_name, middle_name, group_number, role) "
+            "VALUES (1, 1, 'A', 'B', 'C', 'g', 'student')"
+        )
+        conn.execute("INSERT INTO events (id, kind, name, held_on) VALUES (1, 'conference', 'C', '2026-09-01')")
+        conn.execute("INSERT INTO events (id, kind, name, held_on) VALUES (2, 'event', 'E', '2026-09-01')")
+        conn.execute(
+            "INSERT INTO supplements (id, student_id, event_id, status, project_name, submitted_by) "
+            "VALUES (1, 1, 1, 'pending', 'RoboArm', 1)"
+        )
+        conn.execute(
+            "INSERT INTO supplements (id, student_id, event_id, status, what_did, submitted_by) "
+            "VALUES (2, 1, 2, 'pending', 'helped', 1)"
+        )
+        conn.commit()
+
+    command.upgrade(config, "head")
+
+    with closing(sqlite3.connect(db_path)) as conn:
+        rows = conn.execute("SELECT id, participation, work_title, what_did FROM supplements ORDER BY id").fetchall()
+    assert rows == [(1, "project", "RoboArm", None), (2, None, None, "helped")]

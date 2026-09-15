@@ -15,6 +15,7 @@ class StudentSearch(StatesGroup):
 
 class AdminAward(StatesGroup):
     choosing_event = State()
+    choosing_participation = State()
     searching_event = State()
     waiting_new_event_name = State()
     waiting_new_event_date = State()

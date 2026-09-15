@@ -15,6 +15,12 @@ KIND_TEXT = {
     },
 }
 KIND_BY_CODE = {"c": "conference", "e": "event"}
+
+PARTICIPATION_TEXT = {
+    "article": {"icon": "📄", "label": "Статья", "lower": "статья"},
+    "theses": {"icon": "📝", "label": "Тезисы", "lower": "тезисы"},
+    "project": {"icon": "📁", "label": "Проект", "lower": "проект"},
+}
 CODE_BY_KIND = {kind: code for code, kind in KIND_BY_CODE.items()}
 
 # --- Common -------------------------------------------------------------------------------------------------------
@@ -116,7 +122,12 @@ PICK_EVENT_EMPTY = "{icon} Список пока пуст — добавьте {
 ASK_EVENT_SEARCH = "🔎 Введите часть названия."
 ASK_NEW_EVENT_NAME = "📝 Название {gen}:"
 ASK_NEW_EVENT_DATE = "📅 Дата проведения в формате <b>ДД.ММ.ГГГГ</b>, например <code>12.09.2026</code>."
-ASK_CONFERENCE_PROJECT = "📁 С каким проектом выступали? Выберите или напишите название."
+ASK_PARTICIPATION = "🎤 С чем вы участвовали в конференции?"
+ASK_WORK_TITLE = {
+    "article": "📄 Название статьи:",
+    "theses": "📝 Название тезисов:",
+    "project": "📁 С каким проектом выступали? Выберите или напишите название.",
+}
 ASK_EVENT_WHAT_DID = "🙋 Опишите, <b>что вы делали</b> на мероприятии."
 SUBMISSION_CONFIRM = (
     "✅ <b>Проверьте заявку — {label}</b>\n\n{event_line}\n{details}\n\nОтправить админам на подтверждение?"
@@ -131,7 +142,8 @@ REQUEST_CARD = (
 )
 EVENT_LINE = "{icon} {name} · {date}"
 UNVERIFIED_MARK = " ❔"
-DETAIL_PROJECT = "📁 Проект: {value}"
+DETAIL_WORK = "{icon} {label}: {value}"
+DETAIL_NO_WORK = "🎤 Участие: —"
 DETAIL_WHAT_DID = "🙋 Что делал(а): {value}"
 DETAIL_NONE = "—"
 
@@ -198,7 +210,7 @@ CONFIRM_END_MEMBERSHIP = (
 MEMBERSHIP_ENDED = "➖ {name} больше не в «{project}». Надбавка за проект {paid}."
 
 AWARD_PICK_EVENT = "{icon} За какую {acc} начислить {name}? Выберите или добавьте новую."
-AWARD_ASK_PROJECT = "📁 С каким проектом выступал(а)? Выберите, напишите или пропустите."
+AWARD_ASK_PARTICIPATION = "🎤 С чем студент участвовал в конференции? Выберите или пропустите."
 AWARD_ASK_WHAT_DID = "🙋 Что делал(а) на мероприятии? Напишите или пропустите."
 AWARD_PICK_AMOUNT = "💰 Выберите сумму для {name}:"
 AWARD_CONFIRM = "✅ <b>Начислить {amount} BYN?</b>\n\n👤 {student}\n{event_line}\n{details}\n📅 Месяц: {period}"

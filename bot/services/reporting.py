@@ -5,7 +5,7 @@ from decimal import Decimal
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.config import Config
-from bot.db.models import User
+from bot.db.models import Supplement, User
 from bot.db.repo import projects as projects_repo
 from bot.db.repo import supplements as supplements_repo
 from bot.db.repo import users as users_repo
@@ -55,6 +55,16 @@ class StudentStats:
         return not self.ever_in_project and self.approved == 0 and self.pending == 0
 
 
+def _award_basis(supplement: Supplement) -> AwardBasis:
+    return AwardBasis(
+        supplement.event.kind,
+        supplement.event.name,
+        supplement.amount or Decimal(0),
+        supplement.participation,
+        supplement.work_title,
+    )
+
+
 async def build_month_details(session: AsyncSession, config: Config, period: int) -> list[StudentMonthDetail]:
     projects: dict[int, list[ProjectBasis]] = defaultdict(list)
     awards: dict[int, list[AwardBasis]] = defaultdict(list)
@@ -64,9 +74,7 @@ async def build_month_details(session: AsyncSession, config: Config, period: int
         projects[member.user_id].append(ProjectBasis(member.project.name, member.project.regalia))
         students[member.user_id] = member.user
     for supplement in await supplements_repo.list_approved_for_period(session, period):
-        awards[supplement.student_id].append(
-            AwardBasis(supplement.event.kind, supplement.event.name, supplement.amount or Decimal(0))
-        )
+        awards[supplement.student_id].append(_award_basis(supplement))
         students[supplement.student_id] = supplement.student
 
     details = []
@@ -146,9 +154,7 @@ async def student_payouts(
             for m in memberships
             if m.start_period <= period and (m.end_period is None or m.end_period > period)
         ]
-        awards = [
-            AwardBasis(s.event.kind, s.event.name, s.amount or Decimal(0)) for s in approved if s.period == period
-        ]
+        awards = [_award_basis(s) for s in approved if s.period == period]
         result[period] = compute_student_month_payout(
             projects, awards, config.project_amount, config.monthly_cap, config.withhold_rate
         )

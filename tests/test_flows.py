@@ -164,6 +164,7 @@ class Harness:
         await self.press(user_id, "sb:new")
         await self.send(user_id, name)
         await self.send(user_id, "12.09.2026")
+        await self.press(user_id, "sb:w:project")
         await self.send(user_id, "RoboArm")
         await self.press(user_id, "submit:confirm")
 
@@ -207,7 +208,9 @@ async def test_new_event_request_approved_from_card_and_catalog_becomes_visible(
     await harness.press(STUDENT_ID, "submit:confirm")  # double tap
 
     [supplement] = await harness.all(Supplement)
-    assert supplement.status == "pending" and supplement.project_name == "RoboArm"
+    assert (
+        supplement.status == "pending" and supplement.participation == "project" and supplement.work_title == "RoboArm"
+    )
     event = await harness.one(Event, id=supplement.event_id)
     assert not event.is_verified
 
@@ -439,7 +442,8 @@ async def test_merging_duplicate_events_never_pays_twice(harness):
                 session,
                 student.id,
                 event.id,
-                project_name=None,
+                participation=None,
+                work_title=None,
                 what_did=None,
                 amount=Decimal(50),
                 period=period,
@@ -473,13 +477,16 @@ async def test_database_rejects_duplicate_open_requests_and_memberships(harness)
         from bot.db.repo import supplements as supplements_repo
 
         event = await events_repo.create(session, "event", "Хакатон", dt.date(2026, 9, 1), admin.id, verified=True)
-        assert await supplements_repo.create_request(session, student.id, event.id, project_name=None, what_did="x")
+        assert await supplements_repo.create_request(
+            session, student.id, event.id, participation=None, work_title=None, what_did="x"
+        )
         # Bypasses the handler pre-check, like an admin award racing with the student's request.
         duplicate = await supplements_repo.create_award(
             session,
             student.id,
             event.id,
-            project_name=None,
+            participation=None,
+            work_title=None,
             what_did=None,
             amount=Decimal(25),
             period=1,
@@ -778,3 +785,58 @@ async def test_project_card_shows_paid_months_for_current_and_past_members(harne
     student_card = harness.screen_text(SUPER_ADMIN_ID)
     assert "текущий месяц" in student_card and "прошлый месяц" in student_card
     assert student_card.count("Проект «RoboArm» — 200 BYN") == 2
+
+
+async def test_conference_request_with_article_shows_type_everywhere(harness):
+    calls = harness.session
+    await harness.register(SUPER_ADMIN_ID, "Админов")
+    await harness.register(STUDENT_ID, "Студентов")
+
+    await harness.press(STUDENT_ID, "menu:submit")
+    await harness.press(STUDENT_ID, "sb:k:c")
+    await harness.press(STUDENT_ID, "sb:new")
+    await harness.send(STUDENT_ID, "IEEE Robotics 2026")
+    await harness.send(STUDENT_ID, "12.09.2026")
+    assert {"📄 Статья", "📝 Тезисы", "📁 Проект"} <= set(harness.screen_buttons(STUDENT_ID))
+    await harness.press(STUDENT_ID, "sb:w:article")
+    assert "Название статьи" in harness.screen_text(STUDENT_ID)
+    await harness.send(STUDENT_ID, None)  # the title is required
+    assert "Название статьи" in harness.screen_text(STUDENT_ID)
+    await harness.send(STUDENT_ID, "Управление манипулятором")
+    assert "📄 Статья: Управление манипулятором" in harness.screen_text(STUDENT_ID)
+    await harness.press(STUDENT_ID, "submit:confirm")
+
+    [supplement] = await harness.all(Supplement)
+    assert supplement.participation == "article" and supplement.work_title == "Управление манипулятором"
+    card = [m.text for m in calls.of(SendMessage) if m.chat_id == SUPER_ADMIN_ID and "Заявка" in (m.text or "")][-1]
+    assert "📄 Статья: Управление манипулятором" in card
+
+    await harness.send(SUPER_ADMIN_ID, "/requests")
+    await harness.press(SUPER_ADMIN_ID, f"rq:o:{supplement.id}")
+    await harness.press(SUPER_ADMIN_ID, f"rq:ok:{supplement.id}:25")
+    async with db_engine.session_scope() as session:
+        from bot.services.reporting import build_doc_rows
+
+        [row] = await build_doc_rows(session, CONFIG, current_period(CONFIG.timezone))
+    assert row.basis_text == "Конференция «IEEE Robotics 2026» — статья «Управление манипулятором» (25 BYN)"
+
+
+async def test_admin_award_for_conference_with_theses(harness):
+    await harness.register(SUPER_ADMIN_ID, "Админов")
+    await harness.register(STUDENT_ID, "Студентов")
+    student = await harness.one(User, telegram_id=STUDENT_ID)
+
+    await harness.send(SUPER_ADMIN_ID, "/students")
+    await harness.press(SUPER_ADMIN_ID, f"st:c:{student.id}")
+    await harness.press(SUPER_ADMIN_ID, f"st:aw:{student.id}:c")
+    await harness.press(SUPER_ADMIN_ID, "aw:new")
+    await harness.send(SUPER_ADMIN_ID, "Наука молодых")
+    await harness.send(SUPER_ADMIN_ID, "10.09.2026")
+    await harness.press(SUPER_ADMIN_ID, "aw:w:theses")
+    await harness.send(SUPER_ADMIN_ID, "Алгоритмы SLAM")
+    await harness.press(SUPER_ADMIN_ID, "aw:m:12.5")
+    assert "📝 Тезисы: Алгоритмы SLAM" in harness.screen_text(SUPER_ADMIN_ID)
+    await harness.press(SUPER_ADMIN_ID, "aw:y")
+
+    [award] = await harness.all(Supplement)
+    assert award.participation == "theses" and award.work_title == "Алгоритмы SLAM" and award.status == "approved"

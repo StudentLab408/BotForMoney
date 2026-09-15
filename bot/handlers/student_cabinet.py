@@ -15,7 +15,7 @@ from bot.handlers.common import show_main_menu
 from bot.keyboards.builders import button, markup, page_slice, short
 from bot.keyboards.cards import request_card_keyboard
 from bot.keyboards.common import cancel_keyboard
-from bot.keyboards.events import event_picker_keyboard
+from bot.keyboards.events import event_picker_keyboard, participation_row
 from bot.keyboards.student import confirm_cancel_keyboard, profile_keyboard, submission_type_keyboard
 from bot.services import review
 from bot.services.explain import membership_span, month_block, month_title
@@ -27,11 +27,12 @@ from bot.utils.input import MAX_DESCRIPTION_LEN, MAX_TITLE_LEN, read_input, take
 from bot.utils.screen import show_long_screen, show_screen
 from bot.utils.texts import (
     ACTION_EXPIRED,
-    ASK_CONFERENCE_PROJECT,
     ASK_EVENT_SEARCH,
     ASK_EVENT_WHAT_DID,
     ASK_NEW_EVENT_DATE,
     ASK_NEW_EVENT_NAME,
+    ASK_PARTICIPATION,
+    ASK_WORK_TITLE,
     BACK_BUTTON,
     CANCEL_BUTTON,
     CARD_ALREADY_PROCESSED_ALERT,
@@ -337,18 +338,31 @@ async def process_new_event_date(
 
 async def _ask_details(state: FSMContext, bot: Bot, chat_id: int, session: AsyncSession, user: User) -> None:
     kind = (await state.get_data())["kind"]
-    await state.set_state(Submission.waiting_details)
     if kind == "event":
+        await state.set_state(Submission.waiting_details)
         await show_screen(state, bot, chat_id, ASK_EVENT_WHAT_DID, cancel_keyboard())
         return
-    memberships = await projects_repo.list_user_memberships(session, user.id)
-    options = [m.project.name for m in memberships if m.end_period is None]
-    await state.update_data(project_options=options)
-    keyboard = markup(
-        *[[button(f"📁 {short(name)}", f"sb:p:{i}")] for i, name in enumerate(options)],
-        [button(CANCEL_BUTTON, "flow:cancel")],
-    )
-    await show_screen(state, bot, chat_id, ASK_CONFERENCE_PROJECT, keyboard)
+    await state.set_state(Submission.choosing_participation)
+    keyboard = markup(participation_row("sb"), [button(CANCEL_BUTTON, "flow:cancel")])
+    await show_screen(state, bot, chat_id, ASK_PARTICIPATION, keyboard)
+
+
+@router.callback_query(Submission.choosing_participation, F.data.regexp(r"^sb:w:(article|theses|project)$"))
+async def cb_pick_participation(
+    callback: CallbackQuery, state: FSMContext, bot: Bot, session: AsyncSession, current_user: User
+) -> None:
+    participation = callback.data.split(":")[2]
+    await state.update_data(participation=participation)
+    await state.set_state(Submission.waiting_details)
+    rows = []
+    if participation == "project":
+        memberships = await projects_repo.list_user_memberships(session, current_user.id)
+        options = [m.project.name for m in memberships if m.end_period is None]
+        await state.update_data(project_options=options)
+        rows = [[button(f"📁 {short(name)}", f"sb:p:{i}")] for i, name in enumerate(options)]
+    keyboard = markup(*rows, [button(CANCEL_BUTTON, "flow:cancel")])
+    await show_screen(state, bot, callback.message.chat.id, ASK_WORK_TITLE[participation], keyboard)
+    await callback.answer()
 
 
 async def _event_line_from_data(session: AsyncSession, data: dict) -> str | None:
@@ -370,7 +384,9 @@ async def _show_confirm(state: FSMContext, bot: Bot, chat_id: int, session: Asyn
     text = SUBMISSION_CONFIRM.format(
         label=KIND_TEXT[data["kind"]]["label"],
         event_line=line,
-        details=review.details_line(data["kind"], data.get("project_name"), data.get("what_did")),
+        details=review.details_line(
+            data["kind"], data.get("participation"), data.get("work_title"), data.get("what_did")
+        ),
     )
     await show_screen(state, bot, chat_id, text, confirm_cancel_keyboard("submit:confirm"))
 
@@ -382,17 +398,18 @@ async def cb_pick_project_option(callback: CallbackQuery, state: FSMContext, bot
     if index >= len(options):
         await callback.answer(ACTION_EXPIRED, show_alert=True)
         return
-    await state.update_data(project_name=options[index])
+    await state.update_data(work_title=options[index])
     await _show_confirm(state, bot, callback.message.chat.id, session)
     await callback.answer()
 
 
 @router.message(Submission.waiting_details)
 async def process_details(message: Message, state: FSMContext, session: AsyncSession) -> None:
-    kind = (await state.get_data())["kind"]
-    if kind == "conference":
-        value = await read_input(message, state, MAX_TITLE_LEN, ASK_CONFERENCE_PROJECT, cancel_keyboard())
-        field = "project_name"
+    data = await state.get_data()
+    if data["kind"] == "conference":
+        prompt = ASK_WORK_TITLE[data["participation"]]
+        value = await read_input(message, state, MAX_TITLE_LEN, prompt, cancel_keyboard())
+        field = "work_title"
     else:
         value = await read_input(message, state, MAX_DESCRIPTION_LEN, ASK_EVENT_WHAT_DID, cancel_keyboard())
         field = "what_did"
@@ -437,7 +454,8 @@ async def cb_submit_confirm(
         session,
         current_user.id,
         event.id,
-        project_name=data.get("project_name"),
+        participation=data.get("participation"),
+        work_title=data.get("work_title"),
         what_did=data.get("what_did"),
     )
     if supplement is None:

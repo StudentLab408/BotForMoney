@@ -97,7 +97,8 @@ class Supplement(TimestampMixin, Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     student_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     event_id: Mapped[int] = mapped_column(ForeignKey("events.id"), index=True)
-    project_name: Mapped[str | None] = mapped_column(Text)  # conference: project that was presented
+    participation: Mapped[str | None] = mapped_column(String(20))  # conference: article | theses | project
+    work_title: Mapped[str | None] = mapped_column(Text)  # conference: title of the article/theses or project name
     what_did: Mapped[str | None] = mapped_column(Text)  # event: what the student did
 
     status: Mapped[str] = mapped_column(String(20), default="pending", index=True)

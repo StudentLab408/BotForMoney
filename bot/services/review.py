@@ -26,11 +26,13 @@ from bot.utils.texts import (
     CARD_PROCESSED_REJECTED,
     CARD_STUDENT_ARCHIVED,
     CARD_WITHDRAWN,
+    DETAIL_NO_WORK,
     DETAIL_NONE,
-    DETAIL_PROJECT,
     DETAIL_WHAT_DID,
+    DETAIL_WORK,
     EVENT_LINE,
     KIND_TEXT,
+    PARTICIPATION_TEXT,
     PAYOUT_DETAILS_HINT,
     REASON_PART,
     REQUEST_CARD,
@@ -50,9 +52,14 @@ def event_line(kind: str, name: str, held_on: dt.date, *, verified: bool = True)
     return line if verified else line + UNVERIFIED_MARK
 
 
-def details_line(kind: str, project_name: str | None, what_did: str | None) -> str:
+def details_line(kind: str, participation: str | None, work_title: str | None, what_did: str | None) -> str:
     if kind == "conference":
-        return DETAIL_PROJECT.format(value=h(project_name) if project_name else DETAIL_NONE)
+        if not participation:
+            return DETAIL_NO_WORK
+        words = PARTICIPATION_TEXT[participation]
+        return DETAIL_WORK.format(
+            icon=words["icon"], label=words["label"], value=h(work_title) if work_title else DETAIL_NONE
+        )
     return DETAIL_WHAT_DID.format(value=h(what_did) if what_did else DETAIL_NONE)
 
 
@@ -63,7 +70,7 @@ def request_card_text(supplement: Supplement, config: Config) -> str:
         full_name=h(supplement.student.full_name),
         group_number=h(supplement.student.group_number),
         event_line=event_line(event.kind, event.name, event.held_on, verified=event.is_verified),
-        details=details_line(event.kind, supplement.project_name, supplement.what_did),
+        details=details_line(event.kind, supplement.participation, supplement.work_title, supplement.what_did),
         submitted=format_datetime(supplement.created_at, config.timezone),
     )
 

@@ -18,7 +18,7 @@ from bot.filters.roles import IsAdmin
 from bot.handlers.admin_requests import parse_amount
 from bot.keyboards.admin import amount_row
 from bot.keyboards.builders import PAGE_SIZE, button, markup, page_slice, pagination_row, short
-from bot.keyboards.events import event_picker_keyboard
+from bot.keyboards.events import event_picker_keyboard, participation_row
 from bot.services import review
 from bot.services.commands import sync_role_commands
 from bot.services.explain import membership_span, month_block, month_title, paid_until_text
@@ -37,7 +37,8 @@ from bot.utils.texts import (
     ASK_NEW_EVENT_DATE,
     ASK_NEW_EVENT_NAME,
     ASK_STUDENT_SEARCH,
-    AWARD_ASK_PROJECT,
+    ASK_WORK_TITLE,
+    AWARD_ASK_PARTICIPATION,
     AWARD_ASK_WHAT_DID,
     AWARD_CONFIRM,
     AWARD_DONE,
@@ -730,16 +731,35 @@ async def process_award_new_date(message: Message, state: FSMContext, session: A
 
 async def _ask_award_details(state: FSMContext, bot: Bot, chat_id: int, session: AsyncSession) -> None:
     data = await state.get_data()
+    cancel = button(CANCEL_BUTTON, f"st:c:{data['user_id']}")
+    if data["kind"] == "conference":
+        await state.set_state(AdminAward.choosing_participation)
+        keyboard = markup(participation_row("aw"), [button(SKIP_BUTTON, "aw:w:-"), cancel])
+        await show_screen(state, bot, chat_id, AWARD_ASK_PARTICIPATION, keyboard)
+        return
+    await state.set_state(AdminAward.waiting_details)
+    keyboard = markup([button(SKIP_BUTTON, "aw:p:-"), cancel])
+    await show_screen(state, bot, chat_id, AWARD_ASK_WHAT_DID, keyboard)
+
+
+@router.callback_query(AdminAward.choosing_participation, F.data.regexp(r"^aw:w:(article|theses|project|-)$"))
+async def cb_award_participation(callback: CallbackQuery, state: FSMContext, bot: Bot, session: AsyncSession) -> None:
+    await callback.answer()
+    data = await state.get_data()
+    participation = callback.data.split(":")[2]
+    if participation == "-":
+        await _ask_amount(state, bot, callback.message.chat.id, session)
+        return
+    await state.update_data(participation=participation)
     await state.set_state(AdminAward.waiting_details)
     rows = []
-    if data["kind"] == "conference":
+    if participation == "project":
         memberships = await projects_repo.list_user_memberships(session, data["user_id"])
         options = [m.project.name for m in memberships if m.end_period is None]
         await state.update_data(project_options=options)
         rows = [[button(f"📁 {short(name)}", f"aw:p:{i}")] for i, name in enumerate(options)]
-    text = AWARD_ASK_PROJECT if data["kind"] == "conference" else AWARD_ASK_WHAT_DID
-    keyboard = markup(*rows, [button(SKIP_BUTTON, "aw:p:-"), button(CANCEL_BUTTON, f"st:c:{data['user_id']}")])
-    await show_screen(state, bot, chat_id, text, keyboard)
+    keyboard = markup(*rows, [button(CANCEL_BUTTON, f"st:c:{data['user_id']}")])
+    await show_screen(state, bot, callback.message.chat.id, ASK_WORK_TITLE[participation], keyboard)
 
 
 async def _ask_amount(state: FSMContext, bot: Bot, chat_id: int, session: AsyncSession) -> None:
@@ -759,7 +779,7 @@ async def cb_award_detail_option(callback: CallbackQuery, state: FSMContext, bot
         if int(choice) >= len(options):
             await callback.answer(ACTION_EXPIRED, show_alert=True)
             return
-        await state.update_data(project_name=options[int(choice)])
+        await state.update_data(work_title=options[int(choice)])
     await _ask_amount(state, bot, callback.message.chat.id, session)
     await callback.answer()
 
@@ -767,13 +787,21 @@ async def cb_award_detail_option(callback: CallbackQuery, state: FSMContext, bot
 @router.message(AdminAward.waiting_details)
 async def process_award_details(message: Message, state: FSMContext, session: AsyncSession) -> None:
     data = await state.get_data()
-    conference = data["kind"] == "conference"
-    prompt = AWARD_ASK_PROJECT if conference else AWARD_ASK_WHAT_DID
-    keyboard = markup([button(SKIP_BUTTON, "aw:p:-"), button(CANCEL_BUTTON, f"st:c:{data['user_id']}")])
-    value = await read_input(message, state, MAX_TITLE_LEN if conference else MAX_DESCRIPTION_LEN, prompt, keyboard)
+    cancel = button(CANCEL_BUTTON, f"st:c:{data['user_id']}")
+    if data["kind"] == "conference":
+        prompt, keyboard, max_len, field = (
+            ASK_WORK_TITLE[data["participation"]],
+            markup([cancel]),
+            MAX_TITLE_LEN,
+            "work_title",
+        )
+    else:
+        prompt, keyboard = AWARD_ASK_WHAT_DID, markup([button(SKIP_BUTTON, "aw:p:-"), cancel])
+        max_len, field = MAX_DESCRIPTION_LEN, "what_did"
+    value = await read_input(message, state, max_len, prompt, keyboard)
     if value is None:
         return
-    await state.update_data(**{"project_name" if conference else "what_did": value})
+    await state.update_data(**{field: value})
     await _ask_amount(state, message.bot, message.chat.id, session)
 
 
@@ -798,7 +826,9 @@ async def cb_award_amount(
         amount=money(amount),
         student=h(user.full_name),
         event_line=line,
-        details=review.details_line(data["kind"], data.get("project_name"), data.get("what_did")),
+        details=review.details_line(
+            data["kind"], data.get("participation"), data.get("work_title"), data.get("what_did")
+        ),
         period=period_title(current_period(config.timezone)),
     )
     await state.set_state(AdminAward.confirm)
@@ -846,7 +876,8 @@ async def cb_award_confirm(
         session,
         user.id,
         event.id,
-        project_name=data.get("project_name"),
+        participation=data.get("participation"),
+        work_title=data.get("work_title"),
         what_did=data.get("what_did"),
         amount=amount,
         period=current_period(config.timezone),
