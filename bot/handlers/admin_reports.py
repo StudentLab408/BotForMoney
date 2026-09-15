@@ -39,6 +39,12 @@ def _format_report(report: MonthReport, config: Config) -> str:
         f"🏛 Конференции: {report.conference_count} — {money(report.conference_amount)} BYN",
         f"🎪 Мероприятия: {report.event_count} — {money(report.event_amount)} BYN",
     ]
+    if report.overridden_count:
+        lines += [
+            "",
+            f"ℹ️ Конференции и мероприятия участников проектов ({report.overridden_count} шт. "
+            f"на {money(report.overridden_amount)} BYN) не суммируются с проектом.",
+        ]
     if report.students_capped:
         lines += ["", f"⚠️ Упёрлись в лимит {money(config.monthly_cap)} BYN: {report.students_capped}"]
     return "\n".join(lines)

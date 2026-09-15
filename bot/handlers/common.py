@@ -3,12 +3,16 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
+from bot.config import Config
 from bot.db.models import User
+from bot.keyboards.builders import button, markup
 from bot.keyboards.common import back_to_main_menu_keyboard, main_menu_keyboard
+from bot.services.explain import rules_text
 from bot.states.registration import Registration
 from bot.utils.format import h
 from bot.utils.screen import delete_message, show_screen
 from bot.utils.texts import (
+    BACK_BUTTON,
     HELP_ADMIN_SUFFIX,
     HELP_TEXT,
     MAIN_MENU_ADMIN,
@@ -73,3 +77,14 @@ async def cb_main_menu(
     await callback.answer()
     if current_user is not None:
         await show_main_menu(state, bot, callback.message.chat.id, is_admin)
+
+
+@router.callback_query(F.data.in_({"rules:student", "rules:admin"}))
+async def cb_rules(
+    callback: CallbackQuery, state: FSMContext, bot: Bot, config: Config, current_user: User | None
+) -> None:
+    await callback.answer()
+    if current_user is None:
+        return
+    back = "menu:payouts" if callback.data == "rules:student" else "pj:l:0"
+    await show_screen(state, bot, callback.message.chat.id, rules_text(config), markup([button(BACK_BUTTON, back)]))

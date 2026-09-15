@@ -38,6 +38,9 @@ class MonthReport:
     event_amount: Decimal
     students_capped: int
     student_count: int
+    # Approved conference/event awards of project members: approved, but not added on top of the project amount.
+    overridden_count: int
+    overridden_amount: Decimal
 
 
 @dataclass
@@ -82,6 +85,7 @@ async def build_month_report(session: AsyncSession, config: Config, period: int)
     counted_awards = [a for d in details if d.payout.basis_type == "conf_event" for a in d.payout.awards]
     conferences = [a for a in counted_awards if a.kind == "conference"]
     events = [a for a in counted_awards if a.kind == "event"]
+    overridden = [a for d in project_details for a in d.payout.awards]
 
     return MonthReport(
         period=period,
@@ -94,6 +98,8 @@ async def build_month_report(session: AsyncSession, config: Config, period: int)
         event_amount=sum((a.amount for a in events), Decimal(0)),
         students_capped=sum(1 for d in details if d.payout.pre_cap_total > d.payout.gross),
         student_count=len(details),
+        overridden_count=len(overridden),
+        overridden_amount=sum((a.amount for a in overridden), Decimal(0)),
     )
 
 
@@ -127,13 +133,36 @@ async def build_student_stats(session: AsyncSession) -> dict[int, StudentStats]:
     return stats
 
 
-async def student_month_payout(
-    session: AsyncSession, config: Config, user_id: int, period: int
-) -> StudentMonthPayout | None:
-    for detail in await build_month_details(session, config, period):
-        if detail.student.id == user_id:
-            return detail.payout
-    return None
+async def student_payouts(
+    session: AsyncSession, config: Config, user_id: int, periods: list[int]
+) -> dict[int, StudentMonthPayout]:
+    """One student's payout for each requested month, computed exactly like the monthly lists."""
+    memberships = await projects_repo.list_user_memberships(session, user_id)
+    approved = await supplements_repo.list_approved_for_student(session, user_id)
+    result = {}
+    for period in periods:
+        projects = [
+            ProjectBasis(m.project.name, m.project.regalia)
+            for m in memberships
+            if m.start_period <= period and (m.end_period is None or m.end_period > period)
+        ]
+        awards = [
+            AwardBasis(s.event.kind, s.event.name, s.amount or Decimal(0)) for s in approved if s.period == period
+        ]
+        result[period] = compute_student_month_payout(
+            projects, awards, config.project_amount, config.monthly_cap, config.withhold_rate
+        )
+    return result
+
+
+async def student_paid_periods(session: AsyncSession, user_id: int, up_to: int) -> list[int]:
+    """Months (not later than up_to) in which the student had a project or an approved award, newest first."""
+    periods: set[int] = set()
+    for m in await projects_repo.list_user_memberships(session, user_id):
+        last = up_to if m.end_period is None else min(m.end_period - 1, up_to)
+        periods.update(range(m.start_period, last + 1))
+    periods.update(s.period for s in await supplements_repo.list_approved_for_student(session, user_id))
+    return sorted((p for p in periods if p <= up_to), reverse=True)
 
 
 async def list_users_for_filter(

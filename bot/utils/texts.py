@@ -77,6 +77,34 @@ NOTHING_FOUND = "😕 Ничего не найдено."
 
 PROFILE_CARD = "👤 <b>{full_name}</b>\n🎓 Группа: {group_number}\n🏷 Роль: {role_label}\n📁 Проекты: {projects}"
 
+MY_PAYOUTS_TITLE = "💰 <b>Мои начисления</b>\nСуммы указаны полностью, как в официальном списке."
+MY_PAYOUTS_HISTORY = "🗂 <b>Раньше</b>"
+NOT_ADDED_BECAUSE_PROJECT = "ℹ️ Не суммируется: в этом месяце вы участник проекта."
+NOT_ADDED_BECAUSE_PROJECT_ADMIN = "ℹ️ не суммируется — в этом месяце студент в проекте"
+PAYOUT_NOTHING = "— начислений нет"
+PAYOUT_TOTAL = "<b>Итого за месяц: {amount} BYN</b>"
+NOTE_PROJECT_OVERRIDES = (
+    "ℹ️ Конференции и мероприятия этого месяца ({count} шт. на {amount} BYN) не суммируются: "
+    "участнику проекта начисляется {project} BYN."
+)
+NOTE_CAPPED = "ℹ️ Набрано {total} BYN, но за месяц начисляется не больше {cap} BYN."
+AWARD_NOTE_PROJECT = (
+    "\nℹ️ В этом месяце вы участник проекта: начисляется {project} BYN за проект, а эта сумма отдельно не добавляется."
+)
+AWARD_NOTE_CAPPED = "\nℹ️ За месяц набрано {total} BYN, но начисляется не больше {cap} BYN."
+PAYOUT_DETAILS_HINT = "\nПодробнее — «💰 Мои начисления» в меню."
+
+RULES_TEXT = (
+    "ℹ️ <b>Как считаются надбавки</b>\n\n"
+    "📁 <b>Проект</b> — {project} BYN в месяц, пока вы участник. Начисляется с месяца, в котором вас добавили. "
+    "Месяц, в котором вас убрали из проекта, уже не оплачивается.\n\n"
+    "🏛 <b>Конференции</b> и 🎪 <b>мероприятия</b> — сумму ({amounts} BYN) назначает администратор при одобрении. "
+    "Начисление относится к месяцу одобрения. За месяц — не больше {cap} BYN.\n\n"
+    "⚖️ Если в месяце вы участник проекта, начисляется {project} BYN, а конференции и мероприятия "
+    "этого месяца отдельно не добавляются.\n\n"
+    "📄 Список за месяц формируется {day}-го числа следующего месяца."
+)
+
 MY_SUBMISSIONS_TITLE = "📜 <b>Мои заявки</b>"
 MY_SUBMISSIONS_EMPTY = "📭 У вас пока нет заявок. Подать заявку можно в главном меню."
 WITHDRAW_CONFIRM = "↩️ Отозвать заявку «{title}»?"
@@ -117,13 +145,16 @@ INVALID_AMOUNT_ALERT = "⚠️ Некорректная сумма."
 APPROVED_ALERT = "✅ Одобрено"
 REASON_PART = "\nПричина: {reason}"
 
-STUDENT_NOTIFY_APPROVED = "✅ Ваша заявка «{title}» одобрена! Начислено {amount} BYN."
+STUDENT_NOTIFY_APPROVED = "✅ Ваша заявка «{title}» одобрена: {amount} BYN."
 STUDENT_NOTIFY_REJECTED = "❌ Ваша заявка «{title}» отклонена.{reason_part}"
-STUDENT_NOTIFY_AWARD = "✅ Вам начислено {amount} BYN за «{title}»."
+STUDENT_NOTIFY_AWARD = "✅ Администратор начислил вам {amount} BYN за «{title}»."
 STUDENT_NOTIFY_CANCELLED = "🚫 Начисление за «{title}» отменено.{reason_part}"
 STUDENT_NOTIFY_AMOUNT_CHANGED = "✏️ Сумма за «{title}» изменена: {amount} BYN."
-STUDENT_NOTIFY_PROJECT_ADDED = "📁 Вы добавлены в проект «{name}»."
-STUDENT_NOTIFY_PROJECT_REMOVED = "📁 Вы больше не участник проекта «{name}»."
+STUDENT_NOTIFY_PROJECT_ADDED = (
+    "📁 Вы добавлены в проект «{name}». Пока вы участник, каждый месяц начисляется {amount} BYN — "
+    "начиная с месяца {period}."
+)
+STUDENT_NOTIFY_PROJECT_REMOVED = "📁 Вы больше не участник проекта «{name}». Надбавка за проект {paid}."
 
 # --- Admin: requests ----------------------------------------------------------------------------------------------
 
@@ -157,11 +188,14 @@ AMOUNT_CHANGED = "✏️ Сумма изменена: {amount} BYN."
 
 PICK_PROJECT_FOR_STUDENT = "📁 В какой проект добавить {name}?"
 NO_PROJECTS = "📁 Проектов пока нет — создайте проект в разделе «Проекты»."
-PROJECT_MEMBER_ADDED = "📁 {name} в проекте «{project}», оплата с месяца {period}."
+PROJECT_MEMBER_ADDED = "📁 {name} в проекте «{project}»: {amount} BYN в месяц, начиная с {period}."
 PROJECT_MEMBER_EXISTS = "ℹ️ {name} уже участник «{project}»."
 PICK_MEMBERSHIP_TO_END = "➖ Из какого проекта убрать {name}?"
-CONFIRM_END_MEMBERSHIP = "➖ Убрать {name} из «{project}»?\n\nМесяц {period} уже не будет оплачен."
-MEMBERSHIP_ENDED = "➖ {name} больше не в «{project}»."
+CONFIRM_END_MEMBERSHIP = (
+    "➖ Убрать {name} из «{project}»?\n\n"
+    "В проекте: {span}.\nТекущий месяц {period} уже не будет оплачен за этот проект."
+)
+MEMBERSHIP_ENDED = "➖ {name} больше не в «{project}». Надбавка за проект {paid}."
 
 AWARD_PICK_EVENT = "{icon} За какую {acc} начислить {name}? Выберите или добавьте новую."
 AWARD_ASK_PROJECT = "📁 С каким проектом выступал(а)? Выберите, напишите или пропустите."
@@ -209,10 +243,16 @@ EVENT_DELETED = "🗑 «{name}» удалено."
 
 # --- Admin: catalogs ----------------------------------------------------------------------------------------------
 
-PROJECTS_TITLE = "📁 <b>Проекты</b>: {count}"
+PROJECTS_TITLE = (
+    "📁 <b>Проекты</b>: {count}\nУчастник получает {amount} BYN в месяц — один раз, даже если он в нескольких проектах."
+)
 ASK_PROJECT_NAME = "📝 Название проекта:"
 ASK_PROJECT_REGALIA = "🏅 Регалии проекта (награды, достижения) — или нажмите «Пропустить»."
 PROJECT_SAVED = "✅ Проект сохранён."
+PROJECT_PAYMENT_RULE = (
+    "💰 Каждому участнику — {amount} BYN в месяц, начиная с месяца добавления; месяц, в котором студента убрали, "
+    "не оплачивается. Текущий месяц: {period}."
+)
 PICK_STUDENT_FOR_PROJECT = "👥 Кого добавить в «{project}»?"
 PICK_MEMBER_TO_REMOVE = "➖ Кого убрать из «{project}»?"
 PROJECT_ARCHIVE_CONFIRM = "🗄 Архивировать «{name}»?\n\nВсе участники выбудут, месяц {period} уже не оплачивается."

@@ -21,8 +21,8 @@ from bot.keyboards.builders import PAGE_SIZE, button, markup, page_slice, pagina
 from bot.keyboards.events import event_picker_keyboard
 from bot.services import review
 from bot.services.commands import sync_role_commands
-from bot.services.payout import format_basis_text
-from bot.services.reporting import StudentStats, build_student_stats, list_users_for_filter, student_month_payout
+from bot.services.explain import membership_span, month_block, month_title, paid_until_text
+from bot.services.reporting import StudentStats, build_student_stats, list_users_for_filter, student_payouts
 from bot.states.admin import AdminAward, AdminCancelAward, StudentSearch
 from bot.utils.format import h, money
 from bot.utils.input import MAX_DESCRIPTION_LEN, MAX_NAME_LEN, MAX_TITLE_LEN, read_input, take_state_data
@@ -61,6 +61,7 @@ from bot.utils.texts import (
     KIND_TEXT,
     MEMBERSHIP_ENDED,
     NO_PROJECTS,
+    NOT_ADDED_BECAUSE_PROJECT_ADMIN,
     NOTHING_FOUND,
     PICK_MEMBERSHIP_TO_END,
     PICK_NEW_AMOUNT,
@@ -92,14 +93,6 @@ FILTER_BUTTONS = [
     [("Все", "all"), ("📁 Проекты", "proj"), ("✅ Конф.", "conf")],
     [("😴 Без активности", "idle"), ("🗄 Архив", "arch")],
 ]
-
-
-def _membership_span(member: ProjectMember) -> str:
-    if member.end_period is None:
-        return f"с {format_period(member.start_period)}"
-    if member.end_period <= member.start_period:
-        return "не оплачивался"
-    return f"{format_period(member.start_period)}–{format_period(member.end_period - 1)}"
 
 
 def _can_remove(user: User, viewer_is_super_admin: bool, config: Config) -> bool:
@@ -270,7 +263,9 @@ async def show_student_card(
     current = [m for m in memberships if m.end_period is None]
     supplements = await supplements_repo.list_for_student(session, user.id)
     period = current_period(config.timezone)
-    payout = await student_month_payout(session, config, user.id, period)
+    recent = supplements[:5]
+    periods = {period, period - 1} | {s.period for s in recent if s.status == "approved"}
+    payouts = await student_payouts(session, config, user.id, sorted(periods))
     is_super_admin_user = user.telegram_id == config.super_admin_id
 
     role = "Супер-админ" if is_super_admin_user else ("Администратор" if user.role == "admin" else "Студент")
@@ -278,19 +273,24 @@ async def show_student_card(
         f"👤 <b>{h(user.full_name)}</b>" + (" · 🗄 в архиве" if user.is_archived else ""),
         f"🎓 {h(user.group_number)} · 🏷 {role}",
         "",
-        "📁 Проекты: " + (", ".join(f"«{h(m.project.name)}» ({_membership_span(m)})" for m in memberships) or "—"),
+        "📁 <b>Проекты</b>",
+        *[f"• «{h(m.project.name)}» — {membership_span(m, period)}" for m in memberships],
     ]
-    if payout is not None:
-        lines.append(f"💰 {period_title(period)}: {money(payout.gross)} BYN — {h(format_basis_text(payout))}")
-    else:
-        lines.append(f"💰 {period_title(period)}: начислений нет")
+    if not memberships:
+        lines.append("— не участвовал(а)")
+    for month in (period, period - 1):
+        lines += ["", month_block(month_title(month, period), payouts[month], config)]
 
+    lines.append("")
     counts = {
         status: sum(1 for s in supplements if s.status == status) for status in ("approved", "pending", "rejected")
     }
     lines.append(f"📜 Заявки: ✅ {counts['approved']} · ⏳ {counts['pending']} · ❌ {counts['rejected']}")
-    for s in supplements[:5]:
-        lines.append(f"• {KIND_TEXT[s.event.kind]['icon']} «{h(short(s.event.name, 40))}» — {review.status_text(s)}")
+    for s in recent:
+        line = f"• {KIND_TEXT[s.event.kind]['icon']} «{h(short(s.event.name, 40))}» — {review.status_text(s)}"
+        if s.status == "approved" and payouts[s.period].basis_type == "project":
+            line += f"\n  {NOT_ADDED_BECAUSE_PROJECT_ADMIN}"
+        lines.append(line)
     text = "\n".join(lines)
     if notice:
         text = f"{notice}\n\n{text}"
@@ -379,6 +379,10 @@ async def show_award(
 ) -> None:
     await state.clear()
     lines = [review.request_card_text(supplement, config), "", review.status_text(supplement)]
+    if supplement.status == "approved":
+        payout = (await student_payouts(session, config, supplement.student_id, [supplement.period]))[supplement.period]
+        if payout.basis_type == "project":
+            lines.append(NOT_ADDED_BECAUSE_PROJECT_ADMIN)
     text = "\n".join(lines + review.decision_lines(supplement, config))
     if notice:
         text = f"{notice}\n\n{text}"
@@ -521,8 +525,12 @@ async def add_to_project(
     member = await projects_repo.add_member(session, project.id, user.id, period, admin.id)
     if member is None:
         return PROJECT_MEMBER_EXISTS.format(name=h(user.full_name), project=h(project.name))
-    await review.notify(bot, user.telegram_id, STUDENT_NOTIFY_PROJECT_ADDED.format(name=h(project.name)))
-    return PROJECT_MEMBER_ADDED.format(name=h(user.full_name), project=h(project.name), period=format_period(period))
+    amount = money(config.project_amount)
+    text = STUDENT_NOTIFY_PROJECT_ADDED.format(name=h(project.name), amount=amount, period=format_period(period))
+    await review.notify(bot, user.telegram_id, text)
+    return PROJECT_MEMBER_ADDED.format(
+        name=h(user.full_name), project=h(project.name), amount=amount, period=format_period(period)
+    )
 
 
 async def end_project_membership(
@@ -530,10 +538,10 @@ async def end_project_membership(
 ) -> str:
     if not await projects_repo.end_membership(session, member, current_period(config.timezone), admin.id):
         return ACTION_EXPIRED
-    await review.notify(
-        bot, member.user.telegram_id, STUDENT_NOTIFY_PROJECT_REMOVED.format(name=h(member.project.name))
-    )
-    return MEMBERSHIP_ENDED.format(name=h(member.user.full_name), project=h(member.project.name))
+    paid = paid_until_text(member)
+    text = STUDENT_NOTIFY_PROJECT_REMOVED.format(name=h(member.project.name), paid=paid)
+    await review.notify(bot, member.user.telegram_id, text)
+    return MEMBERSHIP_ENDED.format(name=h(member.user.full_name), project=h(member.project.name), paid=paid)
 
 
 @router.callback_query(F.data.regexp(r"^st:pjs:\d+:\d+$"))
@@ -580,10 +588,12 @@ async def cb_confirm_end_membership(
     if member is None or member.end_period is not None:
         await callback.answer(ACTION_EXPIRED, show_alert=True)
         return
+    period = current_period(config.timezone)
     text = CONFIRM_END_MEMBERSHIP.format(
         name=h(member.user.full_name),
         project=h(member.project.name),
-        period=format_period(current_period(config.timezone)),
+        span=membership_span(member, period),
+        period=format_period(period),
     )
     keyboard = markup([button("➖ Да, убрать", f"st:pry:{member.id}"), button(BACK_BUTTON, f"st:c:{member.user_id}")])
     await show_screen(state, bot, callback.message.chat.id, text, keyboard)
@@ -847,7 +857,9 @@ async def cb_award_confirm(
         notice = SUBMISSION_DUPLICATE.format(name=h(event.name))
         await show_student_card(state, bot, chat_id, session, config, user.id, is_super_admin, notice=notice)
         return
-    await review.notify(bot, user.telegram_id, STUDENT_NOTIFY_AWARD.format(amount=money(amount), title=h(event.name)))
+    text = STUDENT_NOTIFY_AWARD.format(amount=money(amount), title=h(event.name))
+    text += await review.payout_note(session, config, user.id, award.period)
+    await review.notify(bot, user.telegram_id, text)
     notice = AWARD_DONE.format(amount=money(amount), event=h(event.name))
     await show_student_card(state, bot, chat_id, session, config, user.id, is_super_admin, notice=notice)
 

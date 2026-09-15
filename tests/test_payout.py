@@ -55,7 +55,7 @@ def test_rounding_boundary():
 
 def test_basis_text():
     project = _compute(projects=[ProjectBasis("Robo", "1 место"), ProjectBasis("Drone", None)])
-    assert format_basis_text(project) == "«Robo», 1 место; «Drone»"
+    assert format_basis_text(project) == "Проект «Robo», 1 место; Проект «Drone»"
     awards = _compute(
         awards=[AwardBasis("conference", "ConfA", Decimal(25)), AwardBasis("event", "EvB", Decimal("12.5"))]
     )

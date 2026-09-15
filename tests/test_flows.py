@@ -317,7 +317,7 @@ async def test_admin_awards_from_student_card_and_can_cancel(harness):
     [award] = await harness.all(Supplement)
     assert award.status == "approved" and award.amount == Decimal(25) and award.what_did == "Вёл мастер-класс"
     assert (await harness.one(Event, id=award.event_id)).is_verified
-    assert any(m.chat_id == STUDENT_ID and "начислено 25 BYN" in m.text for m in calls.of(SendMessage))
+    assert any(m.chat_id == STUDENT_ID and "начислил вам 25 BYN" in m.text for m in calls.of(SendMessage))
 
     await harness.press(SUPER_ADMIN_ID, f"st:a:{award.id}")
     await harness.press(SUPER_ADMIN_ID, f"st:ax:{award.id}")
@@ -699,3 +699,82 @@ async def test_deleting_project_and_event_removes_their_records(harness):
     assert await _count_rows("supplement_notifications") == 0
     async with db_engine.session_scope() as session:
         assert await build_month_details(session, CONFIG, period) == []
+
+
+async def test_project_member_sees_why_a_conference_is_not_added(harness):
+    calls = harness.session
+    await harness.register(SUPER_ADMIN_ID, "Админов")
+    await harness.register(STUDENT_ID, "Студентов")
+    student = await harness.one(User, telegram_id=STUDENT_ID)
+
+    await harness.send(SUPER_ADMIN_ID, "/projects")
+    await harness.press(SUPER_ADMIN_ID, "pj:new")
+    await harness.send(SUPER_ADMIN_ID, "RoboArm")
+    await harness.press(SUPER_ADMIN_ID, "pj:skip")
+    project = await harness.one(Project, name="RoboArm")
+    await harness.press(SUPER_ADMIN_ID, f"pj:as:{project.id}:{student.id}")
+    added = [m.text for m in calls.of(SendMessage) if m.chat_id == STUDENT_ID][-1]
+    assert "каждый месяц начисляется 200 BYN" in added
+
+    await harness.submit_conference_with_new_event(STUDENT_ID, "Конф")
+    [supplement] = await harness.all(Supplement)
+    await harness.send(SUPER_ADMIN_ID, "/requests")
+    await harness.press(SUPER_ADMIN_ID, f"rq:o:{supplement.id}")
+    await harness.press(SUPER_ADMIN_ID, f"rq:ok:{supplement.id}:25")
+
+    approved = [m.text for m in calls.of(SendMessage) if m.chat_id == STUDENT_ID][-1]
+    assert "одобрена: 25 BYN" in approved and "участник проекта" in approved
+
+    await harness.press(STUDENT_ID, "menu:my_submissions")
+    assert "Не суммируется" in harness.screen_text(STUDENT_ID)
+
+    await harness.press(STUDENT_ID, "menu:payouts")
+    payouts = harness.screen_text(STUDENT_ID)
+    assert "Проект «RoboArm» — 200 BYN" in payouts
+    assert "(1 шт. на 25 BYN) не суммируются" in payouts
+    assert "Итого за месяц: 200 BYN" in payouts
+    await harness.press(STUDENT_ID, "rules:student")
+    assert "Как считаются надбавки" in harness.screen_text(STUDENT_ID)
+
+    await harness.press(SUPER_ADMIN_ID, "admin:report")
+    await harness.press(SUPER_ADMIN_ID, "month:report:current")
+    assert "(1 шт. на 25 BYN) не суммируются с проектом" in harness.screen_text(SUPER_ADMIN_ID)
+
+
+async def test_project_card_shows_paid_months_for_current_and_past_members(harness):
+    calls = harness.session
+    await harness.register(SUPER_ADMIN_ID, "Админов")
+    await harness.register(STUDENT_ID, "Текущий")
+    await harness.register(OTHER_STUDENT_ID, "Бывший")
+    current = await harness.one(User, telegram_id=STUDENT_ID)
+    former = await harness.one(User, telegram_id=OTHER_STUDENT_ID)
+    now = current_period(CONFIG.timezone)
+
+    await harness.send(SUPER_ADMIN_ID, "/projects")
+    await harness.press(SUPER_ADMIN_ID, "pj:new")
+    await harness.send(SUPER_ADMIN_ID, "RoboArm")
+    await harness.press(SUPER_ADMIN_ID, "pj:skip")
+    project = await harness.one(Project, name="RoboArm")
+    await harness.press(SUPER_ADMIN_ID, f"pj:as:{project.id}:{current.id}")
+    await harness.press(SUPER_ADMIN_ID, f"pj:as:{project.id}:{former.id}")
+
+    # Removed in the same month it was added: that month is not paid.
+    former_member = await harness.one(ProjectMember, user_id=former.id)
+    await harness.press(SUPER_ADMIN_ID, f"pj:rs:{former_member.id}")
+    removed = [m.text for m in calls.of(SendMessage) if m.chat_id == OTHER_STUDENT_ID][-1]
+    assert "не начислялась" in removed
+
+    async with db_engine.session_scope() as session:
+        stored = await session.get(ProjectMember, (await harness.one(ProjectMember, user_id=current.id)).id)
+        stored.start_period = now - 2
+        await session.commit()
+
+    await harness.press(SUPER_ADMIN_ID, f"pj:o:{project.id}")
+    card = harness.screen_text(SUPER_ADMIN_ID)
+    assert "Участники сейчас (1)" in card and "3 мес., включая текущий" in card
+    assert "Бывшие участники (1)" in card and "не оплачивался" in card
+
+    await harness.press(SUPER_ADMIN_ID, f"st:c:{current.id}")
+    student_card = harness.screen_text(SUPER_ADMIN_ID)
+    assert "текущий месяц" in student_card and "прошлый месяц" in student_card
+    assert student_card.count("Проект «RoboArm» — 200 BYN") == 2

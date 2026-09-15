@@ -8,6 +8,7 @@ def main_menu_keyboard(is_admin: bool) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="📝 Подать заявку", callback_data="menu:submit")
     builder.button(text="📜 Мои заявки", callback_data="menu:my_submissions")
+    builder.button(text="💰 Мои начисления", callback_data="menu:payouts")
     builder.button(text="👤 Мой профиль", callback_data="menu:profile")
     if is_admin:
         builder.button(text="🛠 Админ-панель", callback_data="menu:admin")

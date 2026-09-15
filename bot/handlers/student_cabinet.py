@@ -18,9 +18,11 @@ from bot.keyboards.common import cancel_keyboard
 from bot.keyboards.events import event_picker_keyboard
 from bot.keyboards.student import confirm_cancel_keyboard, profile_keyboard, submission_type_keyboard
 from bot.services import review
+from bot.services.explain import membership_span, month_block, month_title
+from bot.services.reporting import student_paid_periods, student_payouts
 from bot.states.registration import Registration
 from bot.states.submission import Submission
-from bot.utils.format import h
+from bot.utils.format import h, money
 from bot.utils.input import MAX_DESCRIPTION_LEN, MAX_TITLE_LEN, read_input, take_state_data
 from bot.utils.screen import show_long_screen, show_screen
 from bot.utils.texts import (
@@ -37,8 +39,11 @@ from bot.utils.texts import (
     KIND_BY_CODE,
     KIND_TEXT,
     MAIN_MENU_BUTTON,
+    MY_PAYOUTS_HISTORY,
+    MY_PAYOUTS_TITLE,
     MY_SUBMISSIONS_EMPTY,
     MY_SUBMISSIONS_TITLE,
+    NOT_ADDED_BECAUSE_PROJECT,
     NOTHING_FOUND,
     PICK_EVENT,
     PICK_EVENT_EMPTY,
@@ -51,7 +56,7 @@ from bot.utils.texts import (
     WITHDRAW_CONFIRM,
     WITHDRAW_DONE,
 )
-from bot.utils.time import parse_date
+from bot.utils.time import current_period, parse_date, period_title
 
 router = Router()
 router.message.filter(IsRegistered())
@@ -69,11 +74,14 @@ async def cb_profile(
     state: FSMContext,
     bot: Bot,
     session: AsyncSession,
+    config: Config,
     current_user: User,
     is_super_admin: bool,
 ) -> None:
     memberships = await projects_repo.list_user_memberships(session, current_user.id)
-    projects = ", ".join(f"«{h(m.project.name)}»" for m in memberships if m.end_period is None) or "—"
+    period = current_period(config.timezone)
+    current = [m for m in memberships if m.end_period is None]
+    projects = ", ".join(f"«{h(m.project.name)}» ({membership_span(m, period)})" for m in current) or "—"
     role_label = "Супер-админ" if is_super_admin else ROLE_LABELS.get(current_user.role, current_user.role)
     text = PROFILE_CARD.format(
         full_name=h(current_user.full_name),
@@ -97,10 +105,18 @@ async def cb_profile_edit(callback: CallbackQuery, state: FSMContext, bot: Bot) 
 
 
 async def show_my_submissions(
-    state: FSMContext, bot: Bot, chat_id: int, session: AsyncSession, user: User, notice: str | None = None
+    state: FSMContext,
+    bot: Bot,
+    chat_id: int,
+    session: AsyncSession,
+    config: Config,
+    user: User,
+    notice: str | None = None,
 ) -> None:
     await state.clear()
     submissions = await supplements_repo.list_for_student(session, user.id)
+    approved_periods = sorted({s.period for s in submissions if s.status == "approved"})
+    payouts = await student_payouts(session, config, user.id, approved_periods)
     if not submissions:
         text = MY_SUBMISSIONS_EMPTY
     else:
@@ -108,6 +124,8 @@ async def show_my_submissions(
         for s in submissions:
             icon = KIND_TEXT[s.event.kind]["icon"]
             lines += ["", f"{icon} «{h(s.event.name)}» · {s.event.held_on:%d.%m.%Y}", review.status_text(s)]
+            if s.status == "approved" and payouts[s.period].basis_type == "project":
+                lines.append(NOT_ADDED_BECAUSE_PROJECT)
         text = "\n".join(lines)
     if notice:
         text = f"{notice}\n\n{text}"
@@ -128,10 +146,10 @@ async def _own_supplement(session: AsyncSession, user: User, supplement_id: str)
 
 @router.callback_query(F.data == "menu:my_submissions")
 async def cb_my_submissions(
-    callback: CallbackQuery, state: FSMContext, bot: Bot, session: AsyncSession, current_user: User
+    callback: CallbackQuery, state: FSMContext, bot: Bot, session: AsyncSession, config: Config, current_user: User
 ) -> None:
     await callback.answer()
-    await show_my_submissions(state, bot, callback.message.chat.id, session, current_user)
+    await show_my_submissions(state, bot, callback.message.chat.id, session, config, current_user)
 
 
 @router.callback_query(F.data.regexp(r"^my:wd:\d+$"))
@@ -161,7 +179,41 @@ async def cb_withdraw(
     supplement = await _own_supplement(session, current_user, callback.data.split(":")[2])
     ok = supplement is not None and await review.withdraw_request(bot, session, config, supplement.id)
     notice = WITHDRAW_DONE if ok else CARD_ALREADY_PROCESSED_ALERT
-    await show_my_submissions(state, bot, callback.message.chat.id, session, current_user, notice)
+    await show_my_submissions(state, bot, callback.message.chat.id, session, config, current_user, notice)
+
+
+# --- My payouts ---------------------------------------------------------------------------------------------------
+
+HISTORY_MONTHS = 6
+
+
+def _short_basis(payout) -> str:
+    if payout.basis_type == "project":
+        return "проект " + ", ".join(f"«{h(p.name)}»" for p in payout.projects)
+    return f"конференции и мероприятия: {len(payout.awards)} шт."
+
+
+@router.callback_query(F.data == "menu:payouts")
+async def cb_my_payouts(
+    callback: CallbackQuery, state: FSMContext, bot: Bot, session: AsyncSession, config: Config, current_user: User
+) -> None:
+    await callback.answer()
+    await state.clear()
+    period = current_period(config.timezone)
+    earlier = [p for p in await student_paid_periods(session, current_user.id, period) if p < period - 1]
+    earlier = earlier[:HISTORY_MONTHS]
+    payouts = await student_payouts(session, config, current_user.id, [period, period - 1, *earlier])
+
+    blocks = [MY_PAYOUTS_TITLE]
+    blocks += [month_block(month_title(p, period), payouts[p], config) for p in (period, period - 1)]
+    if earlier:
+        history = [
+            f"• {period_title(p).capitalize()} — {money(payouts[p].gross)} BYN ({_short_basis(payouts[p])})"
+            for p in earlier
+        ]
+        blocks.append("\n".join([MY_PAYOUTS_HISTORY, *history]))
+    keyboard = markup([button("ℹ️ Как считаются надбавки", "rules:student")], [button(MAIN_MENU_BUTTON, "menu:main")])
+    await show_long_screen(state, bot, callback.message.chat.id, "\n\n".join(blocks), keyboard)
 
 
 # --- New request --------------------------------------------------------------------------------------------------

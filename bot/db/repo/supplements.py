@@ -173,6 +173,13 @@ async def list_approved_for_period(session: AsyncSession, period: int) -> list[S
     return list(result.scalars().all())
 
 
+async def list_approved_for_student(session: AsyncSession, student_id: int) -> list[Supplement]:
+    result = await session.execute(
+        select(Supplement).where(Supplement.student_id == student_id, Supplement.status == "approved")
+    )
+    return list(result.scalars().all())
+
+
 async def list_for_student(session: AsyncSession, student_id: int) -> list[Supplement]:
     result = await session.execute(
         select(Supplement)

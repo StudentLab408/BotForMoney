@@ -43,9 +43,9 @@ async def cmd_students(message: Message, state: FSMContext, bot: Bot, session: A
 
 
 @router.message(Command("projects"))
-async def cmd_projects(message: Message, state: FSMContext, bot: Bot, session: AsyncSession) -> None:
+async def cmd_projects(message: Message, state: FSMContext, bot: Bot, session: AsyncSession, config: Config) -> None:
     await _drop_command(message, bot)
-    await show_projects(state, bot, message.chat.id, session, new=True)
+    await show_projects(state, bot, message.chat.id, session, config, new=True)
 
 
 @router.message(Command("events"))

@@ -19,6 +19,7 @@ from bot.handlers.admin_students import add_to_project, end_project_membership
 from bot.keyboards.builders import button, markup, page_slice, pagination_row, short
 from bot.keyboards.events import event_button_text
 from bot.services import review
+from bot.services.explain import membership_span
 from bot.states.admin import EventForm, ProjectForm
 from bot.utils.format import h, money
 from bot.utils.input import MAX_DESCRIPTION_LEN, MAX_TITLE_LEN, read_input, take_state_data
@@ -54,6 +55,7 @@ from bot.utils.texts import (
     PROJECT_ARCHIVE_CONFIRM,
     PROJECT_ARCHIVED,
     PROJECT_DELETED,
+    PROJECT_PAYMENT_RULE,
     PROJECT_RESTORED,
     PROJECT_SAVED,
     PROJECTS_TITLE,
@@ -78,6 +80,7 @@ async def show_projects(
     bot: Bot,
     chat_id: int,
     session: AsyncSession,
+    config: Config,
     page: int = 0,
     *,
     notice: str | None = None,
@@ -89,43 +92,56 @@ async def show_projects(
     items, page, pages = page_slice(projects, page)
     await remember(state, projects_page=page)
     rows = [
-        [button(f"{'🗄 ' if p.is_archived else ''}📁 {short(p.name, 32)} · 👥{member_counts[p.id]}", f"pj:o:{p.id}")]
+        [button(f"{'🗄 ' if p.is_archived else ''}📁 {short(p.name, 32)} · 👥 {member_counts[p.id]}", f"pj:o:{p.id}")]
         for p in items
     ]
-    text = PROJECTS_TITLE.format(count=len(projects)) + ("" if projects else f"\n\n{NOTHING_FOUND}")
+    text = PROJECTS_TITLE.format(count=len(projects), amount=money(config.project_amount))
+    if not projects:
+        text += f"\n\n{NOTHING_FOUND}"
     if notice:
         text = f"{notice}\n\n{text}"
     keyboard = markup(
         *rows,
         pagination_row(page, pages, lambda p: f"pj:l:{p}"),
-        [button("➕ Новый проект", "pj:new")],
+        [button("➕ Новый проект", "pj:new"), button("ℹ️ Как считаются", "rules:admin")],
         [button(BACK_BUTTON, "menu:admin")],
     )
     await show_screen(state, bot, chat_id, text, keyboard, new=new)
 
 
 async def show_project(
-    state: FSMContext, bot: Bot, chat_id: int, session: AsyncSession, project_id: int, notice: str | None = None
+    state: FSMContext,
+    bot: Bot,
+    chat_id: int,
+    session: AsyncSession,
+    config: Config,
+    project_id: int,
+    notice: str | None = None,
 ) -> None:
     await state.clear()
     project = await projects_repo.get(session, project_id)
     if project is None:
-        await show_projects(state, bot, chat_id, session)
+        await show_projects(state, bot, chat_id, session, config)
         return
+    period = current_period(config.timezone)
     members = await projects_repo.list_members(session, project.id, current_only=False)
     current = [m for m in members if m.end_period is None]
+    past = sorted((m for m in members if m.end_period is not None), key=lambda m: m.end_period, reverse=True)
+
+    def member_line(m) -> str:
+        return f"• {h(m.user.full_name)} ({h(m.user.group_number)}) — {membership_span(m, period)}"
+
     lines = [
         f"📁 <b>{h(project.name)}</b>" + (" · 🗄 в архиве" if project.is_archived else ""),
         f"🏅 Регалии: {h(project.regalia) if project.regalia else '—'}",
         "",
-        f"👥 Участники ({len(current)}):",
-        *[f"• {h(m.user.full_name)} ({h(m.user.group_number)}) — с {format_period(m.start_period)}" for m in current],
+        PROJECT_PAYMENT_RULE.format(amount=money(config.project_amount), period=format_period(period)),
+        "",
+        f"👥 <b>Участники сейчас ({len(current)})</b>",
+        *([member_line(m) for m in current] or ["— никого"]),
     ]
-    if not current:
-        lines.append("— никого —")
-    past = len(members) - len(current)
     if past:
-        lines.append(f"\nБывших участников: {past}")
+        lines += ["", f"🗂 <b>Бывшие участники ({len(past)})</b>", *[member_line(m) for m in past]]
     text = "\n".join(lines)
     if notice:
         text = f"{notice}\n\n{text}"
@@ -147,15 +163,19 @@ async def show_project(
 
 
 @router.callback_query(F.data.regexp(r"^pj:l:\d+$"))
-async def cb_projects(callback: CallbackQuery, state: FSMContext, bot: Bot, session: AsyncSession) -> None:
-    await show_projects(state, bot, callback.message.chat.id, session, _id(callback))
+async def cb_projects(
+    callback: CallbackQuery, state: FSMContext, bot: Bot, session: AsyncSession, config: Config
+) -> None:
+    await show_projects(state, bot, callback.message.chat.id, session, config, _id(callback))
     await callback.answer()
 
 
 @router.callback_query(F.data.regexp(r"^pj:o:\d+$"))
-async def cb_project(callback: CallbackQuery, state: FSMContext, bot: Bot, session: AsyncSession) -> None:
+async def cb_project(
+    callback: CallbackQuery, state: FSMContext, bot: Bot, session: AsyncSession, config: Config
+) -> None:
     await callback.answer()
-    await show_project(state, bot, callback.message.chat.id, session, _id(callback))
+    await show_project(state, bot, callback.message.chat.id, session, config, _id(callback))
 
 
 async def _ask_project_field(state: FSMContext, bot: Bot, chat_id: int, mode: str, project_id: int | None) -> None:
@@ -185,7 +205,9 @@ async def cb_project_edit(callback: CallbackQuery, state: FSMContext, bot: Bot) 
 
 
 @router.message(ProjectForm.waiting_name)
-async def process_project_name(message: Message, state: FSMContext, session: AsyncSession, current_user: User) -> None:
+async def process_project_name(
+    message: Message, state: FSMContext, session: AsyncSession, config: Config, current_user: User
+) -> None:
     data = await state.get_data()
     back = f"pj:o:{data['project_id']}" if data.get("project_id") else "pj:l:0"
     name = await read_input(message, state, MAX_TITLE_LEN, ASK_PROJECT_NAME, markup([button(CANCEL_BUTTON, back)]))
@@ -194,7 +216,7 @@ async def process_project_name(message: Message, state: FSMContext, session: Asy
     if data["mode"] == "rename":
         project = await projects_repo.get(session, data["project_id"])
         await projects_repo.update_fields(session, project, name=name)
-        await show_project(state, message.bot, message.chat.id, session, project.id, PROJECT_SAVED)
+        await show_project(state, message.bot, message.chat.id, session, config, project.id, PROJECT_SAVED)
         return
     await state.update_data(name=name)
     await state.set_state(ProjectForm.waiting_regalia)
@@ -203,7 +225,13 @@ async def process_project_name(message: Message, state: FSMContext, session: Asy
 
 
 async def _save_regalia(
-    state: FSMContext, bot: Bot, chat_id: int, session: AsyncSession, admin: User, regalia: str | None
+    state: FSMContext,
+    bot: Bot,
+    chat_id: int,
+    session: AsyncSession,
+    config: Config,
+    admin: User,
+    regalia: str | None,
 ) -> None:
     data = await take_state_data(state, ProjectForm.waiting_regalia)
     if data is None:
@@ -213,27 +241,27 @@ async def _save_regalia(
     else:
         project = await projects_repo.get(session, data["project_id"])
         await projects_repo.update_fields(session, project, regalia=regalia)
-    await show_project(state, bot, chat_id, session, project.id, PROJECT_SAVED)
+    await show_project(state, bot, chat_id, session, config, project.id, PROJECT_SAVED)
 
 
 @router.callback_query(ProjectForm.waiting_regalia, F.data == "pj:skip")
 async def cb_project_skip_regalia(
-    callback: CallbackQuery, state: FSMContext, bot: Bot, session: AsyncSession, current_user: User
+    callback: CallbackQuery, state: FSMContext, bot: Bot, session: AsyncSession, config: Config, current_user: User
 ) -> None:
     await callback.answer()
-    await _save_regalia(state, bot, callback.message.chat.id, session, current_user, None)
+    await _save_regalia(state, bot, callback.message.chat.id, session, config, current_user, None)
 
 
 @router.message(ProjectForm.waiting_regalia)
 async def process_project_regalia(
-    message: Message, state: FSMContext, session: AsyncSession, current_user: User
+    message: Message, state: FSMContext, session: AsyncSession, config: Config, current_user: User
 ) -> None:
     data = await state.get_data()
     back = f"pj:o:{data['project_id']}" if data.get("project_id") else "pj:l:0"
     keyboard = markup([button(SKIP_BUTTON, "pj:skip"), button(CANCEL_BUTTON, back)])
     regalia = await read_input(message, state, MAX_DESCRIPTION_LEN, ASK_PROJECT_REGALIA, keyboard)
     if regalia is not None:
-        await _save_regalia(state, message.bot, message.chat.id, session, current_user, regalia)
+        await _save_regalia(state, message.bot, message.chat.id, session, config, current_user, regalia)
 
 
 @router.callback_query(F.data.regexp(r"^pj:add:\d+:\d+$"))
@@ -274,7 +302,7 @@ async def cb_project_add_student(
         if user is None or user.is_archived
         else await add_to_project(bot, session, config, user, project_id, current_user)
     )
-    await show_project(state, bot, callback.message.chat.id, session, project_id, notice)
+    await show_project(state, bot, callback.message.chat.id, session, config, project_id, notice)
 
 
 @router.callback_query(F.data.regexp(r"^pj:rm:\d+$"))
@@ -307,7 +335,7 @@ async def cb_project_remove_member(
     if member is None:
         return
     notice = await end_project_membership(bot, session, config, member, current_user)
-    await show_project(state, bot, callback.message.chat.id, session, member.project_id, notice)
+    await show_project(state, bot, callback.message.chat.id, session, config, member.project_id, notice)
 
 
 @router.callback_query(F.data.regexp(r"^pj:ar:\d+$"))
@@ -343,7 +371,7 @@ async def cb_project_archive(
             await end_project_membership(bot, session, config, member, current_user)
     await projects_repo.update_fields(session, project, is_archived=archive)
     notice = (PROJECT_ARCHIVED if archive else PROJECT_RESTORED).format(name=h(project.name))
-    await show_project(state, bot, callback.message.chat.id, session, project.id, notice)
+    await show_project(state, bot, callback.message.chat.id, session, config, project.id, notice)
 
 
 # --- Conferences and events ---------------------------------------------------------------------------------------
@@ -580,7 +608,9 @@ async def cb_project_delete_ask(callback: CallbackQuery, state: FSMContext, bot:
 
 
 @router.callback_query(F.data.regexp(r"^pj:dely:\d+$"))
-async def cb_project_delete(callback: CallbackQuery, state: FSMContext, bot: Bot, session: AsyncSession) -> None:
+async def cb_project_delete(
+    callback: CallbackQuery, state: FSMContext, bot: Bot, session: AsyncSession, config: Config
+) -> None:
     project = await projects_repo.get(session, _id(callback))
     if project is None:
         await callback.answer(ACTION_EXPIRED, show_alert=True)
@@ -590,7 +620,7 @@ async def cb_project_delete(callback: CallbackQuery, state: FSMContext, bot: Bot
     await deletion_repo.delete_project(session, project)
     page = await recall(state, "projects_page", 0)
     await show_projects(
-        state, bot, callback.message.chat.id, session, page, notice=PROJECT_DELETED.format(name=h(name))
+        state, bot, callback.message.chat.id, session, config, page, notice=PROJECT_DELETED.format(name=h(name))
     )
 
 

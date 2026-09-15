@@ -17,6 +17,8 @@ from bot.db.models import Supplement, User
 from bot.db.repo import events as events_repo
 from bot.db.repo import supplements as supplements_repo
 from bot.db.repo import users as users_repo
+from bot.services.explain import award_note
+from bot.services.reporting import student_payouts
 from bot.utils.format import h, money
 from bot.utils.texts import (
     CARD_DELETED,
@@ -29,6 +31,7 @@ from bot.utils.texts import (
     DETAIL_WHAT_DID,
     EVENT_LINE,
     KIND_TEXT,
+    PAYOUT_DETAILS_HINT,
     REASON_PART,
     REQUEST_CARD,
     STUDENT_NOTIFY_AMOUNT_CHANGED,
@@ -134,6 +137,13 @@ async def stamp_deleted_requests(
             await _stamp_cards(bot, session, config, supplement, CARD_DELETED.format(date=_now_str(config)))
 
 
+async def payout_note(session: AsyncSession, config: Config, student_id: int, period: int) -> str:
+    """Explains, when needed, why an approved amount is not simply added to the month's total."""
+    payout = (await student_payouts(session, config, student_id, [period]))[period]
+    note = award_note(payout, config)
+    return note + PAYOUT_DETAILS_HINT if note else ""
+
+
 def _reason_part(reason: str | None) -> str:
     return REASON_PART.format(reason=h(reason)) if reason else ""
 
@@ -152,8 +162,9 @@ async def approve_request(
 
     suffix = CARD_PROCESSED_APPROVED.format(amount=money(amount), admin_name=h(admin.full_name), date=_now_str(config))
     await _stamp_cards(bot, session, config, supplement, suffix)
-    title = h(supplement.event.name)
-    await notify(bot, supplement.student.telegram_id, STUDENT_NOTIFY_APPROVED.format(title=title, amount=money(amount)))
+    text = STUDENT_NOTIFY_APPROVED.format(title=h(supplement.event.name), amount=money(amount))
+    text += await payout_note(session, config, supplement.student_id, supplement.period)
+    await notify(bot, supplement.student.telegram_id, text)
     return True
 
 

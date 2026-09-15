@@ -59,7 +59,7 @@ def compute_student_month_payout(
 
 def format_basis_text(payout: StudentMonthPayout) -> str:
     if payout.basis_type == "project":
-        return "; ".join(f"«{p.name}»" + (f", {p.regalia}" if p.regalia else "") for p in payout.projects)
+        return "; ".join(f"Проект «{p.name}»" + (f", {p.regalia}" if p.regalia else "") for p in payout.projects)
     if payout.basis_type == "conf_event":
         return "; ".join(
             f"{KIND_LABELS.get(a.kind, a.kind)} «{a.event_name}» ({money(a.amount)} BYN)" for a in payout.awards
