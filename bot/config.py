@@ -1,6 +1,7 @@
 import os
 from dataclasses import dataclass
 from decimal import Decimal
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -20,6 +21,11 @@ class Config:
     monthly_cap: Decimal
     auto_send_day: int
     auto_send_hour: int
+    backup_keep_days: int = 30
+
+    @property
+    def backup_dir(self) -> Path:
+        return Path(self.db_path).resolve().parent / "backups"
 
 
 def load_config() -> Config:
@@ -41,4 +47,5 @@ def load_config() -> Config:
         monthly_cap=Decimal(os.getenv("MONTHLY_CAP", "200")),
         auto_send_day=int(os.getenv("AUTO_SEND_DAY", "8")),
         auto_send_hour=int(os.getenv("AUTO_SEND_HOUR", "9")),
+        backup_keep_days=int(os.getenv("BACKUP_KEEP_DAYS", "30")),
     )

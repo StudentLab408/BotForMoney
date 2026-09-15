@@ -41,7 +41,7 @@ async def read_input(
 async def take_state_data(state: FSMContext, expected: State) -> dict[str, Any] | None:
     """Consume FSM data of a confirm step exactly once, so a double tap cannot act twice.
 
-    With MemoryStorage these calls never yield to the event loop, so check-and-clear is atomic.
+    Safe because the dispatcher uses SimpleEventIsolation: updates from one user are handled one at a time.
     """
     if await state.get_state() != expected.state:
         return None

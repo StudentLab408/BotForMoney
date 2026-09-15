@@ -1,39 +1,27 @@
 from aiogram.types import InlineKeyboardMarkup
-from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from bot.keyboards.builders import button, markup
 from bot.utils.texts import CANCEL_BUTTON, CONFIRM_BUTTON, MAIN_MENU_BUTTON, RETRY_BUTTON
 
 
 def submission_type_keyboard() -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    builder.button(text="🏛 Конференция", callback_data="submit_type:conference")
-    builder.button(text="🎪 Мероприятие", callback_data="submit_type:event")
-    builder.button(text=CANCEL_BUTTON, callback_data="flow:cancel")
-    builder.adjust(2, 1)
-    return builder.as_markup()
+    return markup(
+        [button("🏛 Конференция", "sb:k:c"), button("🎪 Мероприятие", "sb:k:e")],
+        [button(CANCEL_BUTTON, "flow:cancel")],
+    )
 
 
-def confirm_cancel_keyboard(confirm_cb: str) -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    builder.button(text=CONFIRM_BUTTON, callback_data=confirm_cb)
-    builder.button(text=CANCEL_BUTTON, callback_data="flow:cancel")
-    builder.adjust(2)
-    return builder.as_markup()
+def confirm_cancel_keyboard(confirm_cb: str, cancel_cb: str = "flow:cancel") -> InlineKeyboardMarkup:
+    return markup([button(CONFIRM_BUTTON, confirm_cb), button(CANCEL_BUTTON, cancel_cb)])
 
 
 def registration_confirm_keyboard(can_cancel: bool) -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    builder.button(text=CONFIRM_BUTTON, callback_data="reg:confirm")
-    builder.button(text=RETRY_BUTTON, callback_data="reg:retry")
-    if can_cancel:
-        builder.button(text=CANCEL_BUTTON, callback_data="flow:cancel")
-    builder.adjust(1)
-    return builder.as_markup()
+    return markup(
+        [button(CONFIRM_BUTTON, "reg:confirm")],
+        [button(RETRY_BUTTON, "reg:retry")],
+        [button(CANCEL_BUTTON, "flow:cancel")] if can_cancel else None,
+    )
 
 
 def profile_keyboard() -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    builder.button(text="✏️ Изменить данные", callback_data="profile:edit")
-    builder.button(text=MAIN_MENU_BUTTON, callback_data="menu:main")
-    builder.adjust(1)
-    return builder.as_markup()
+    return markup([button("✏️ Изменить данные", "profile:edit")], [button(MAIN_MENU_BUTTON, "menu:main")])

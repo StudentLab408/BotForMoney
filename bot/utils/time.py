@@ -1,3 +1,5 @@
+"""Time helpers. A "period" is a calendar month stored as one int: year * 12 + (month - 1)."""
+
 import datetime as dt
 from zoneinfo import ZoneInfo
 
@@ -21,19 +23,30 @@ def now(timezone: str) -> dt.datetime:
     return dt.datetime.now(ZoneInfo(timezone))
 
 
-def current_period(timezone: str) -> tuple[int, int]:
+def to_period(year: int, month: int) -> int:
+    return year * 12 + month - 1
+
+
+def from_period(period: int) -> tuple[int, int]:
+    year, month_index = divmod(period, 12)
+    return year, month_index + 1
+
+
+def current_period(timezone: str) -> int:
     moment = now(timezone)
-    return moment.year, moment.month
+    return to_period(moment.year, moment.month)
 
 
-def previous_period(year: int, month: int) -> tuple[int, int]:
-    if month == 1:
-        return year - 1, 12
-    return year, month - 1
+def period_title(period: int) -> str:
+    """'сентябрь 2026'."""
+    year, month = from_period(period)
+    return f"{MONTH_NAMES[month - 1]} {year}"
 
 
-def month_name(month: int) -> str:
-    return MONTH_NAMES[month - 1]
+def format_period(period: int) -> str:
+    """'09.2026'."""
+    year, month = from_period(period)
+    return f"{month:02d}.{year}"
 
 
 def format_datetime(moment: dt.datetime, timezone: str) -> str:
@@ -43,15 +56,25 @@ def format_datetime(moment: dt.datetime, timezone: str) -> str:
     return moment.astimezone(ZoneInfo(timezone)).strftime("%d.%m.%Y %H:%M")
 
 
-def parse_month_string(raw: str) -> tuple[int, int] | None:
-    """Parse 'MM.YYYY' into (year, month), or None if invalid."""
+def format_date(value: dt.date) -> str:
+    return value.strftime("%d.%m.%Y")
+
+
+def parse_month_string(raw: str) -> int | None:
+    """Parse 'MM.YYYY' into a period, or None if invalid."""
     parts = raw.strip().split(".")
-    if len(parts) != 2:
+    if len(parts) != 2 or not all(part.isdigit() for part in parts):
         return None
-    month_str, year_str = parts
-    if not (month_str.isdigit() and year_str.isdigit()):
-        return None
-    month, year = int(month_str), int(year_str)
+    month, year = int(parts[0]), int(parts[1])
     if not (1 <= month <= 12) or year < 2000:
         return None
-    return year, month
+    return to_period(year, month)
+
+
+def parse_date(raw: str) -> dt.date | None:
+    """Parse 'ДД.ММ.ГГГГ', or None if invalid."""
+    try:
+        value = dt.datetime.strptime(raw.strip(), "%d.%m.%Y").date()
+    except ValueError:
+        return None
+    return value if value.year >= 2000 else None

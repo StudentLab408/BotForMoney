@@ -1,21 +1,26 @@
+"""Monthly payout rules, free of Telegram and database code."""
+
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Literal, Protocol
+from typing import Literal
 
 from bot.utils.format import money
 
-
-class SupplementRow(Protocol):
-    type: str
-    status: str
-    amount: Decimal | None
-    project_name: str | None
-    regalia: str | None
-    conference_name: str | None
-    event_name: str | None
-
-
 BasisType = Literal["project", "conf_event", "none"]
+KIND_LABELS = {"conference": "Конференция", "event": "Мероприятие"}
+
+
+@dataclass(frozen=True)
+class ProjectBasis:
+    name: str
+    regalia: str | None
+
+
+@dataclass(frozen=True)
+class AwardBasis:
+    kind: str
+    event_name: str
+    amount: Decimal
 
 
 @dataclass
@@ -24,60 +29,39 @@ class StudentMonthPayout:
     pre_cap_total: Decimal
     gross: Decimal
     withheld: Decimal
-    basis_entries: list[SupplementRow]
+    projects: list[ProjectBasis]
+    awards: list[AwardBasis]
 
 
 def compute_student_month_payout(
-    entries: list[SupplementRow],
+    projects: list[ProjectBasis],
+    awards: list[AwardBasis],
     project_amount: Decimal,
     monthly_cap: Decimal,
     withhold_rate: Decimal,
 ) -> StudentMonthPayout:
-    approved = [e for e in entries if e.status == "approved"]
-    projects = [e for e in approved if e.type == "project"]
-    others = [e for e in approved if e.type in ("conference", "event")]
-
+    """Project membership pays a flat amount and overrides awards; otherwise awards are summed up to the cap."""
     if projects:
-        gross = project_amount
         basis_type: BasisType = "project"
-        basis_entries = projects
         pre_cap_total = Decimal(0)
-    elif others:
-        pre_cap_total = sum((e.amount or Decimal(0) for e in others), Decimal(0))
-        gross = min(pre_cap_total, monthly_cap)
+        gross = project_amount
+    elif awards:
         basis_type = "conf_event"
-        basis_entries = others
+        pre_cap_total = sum((a.amount for a in awards), Decimal(0))
+        gross = min(pre_cap_total, monthly_cap)
     else:
-        gross = Decimal(0)
         basis_type = "none"
-        basis_entries = []
-        pre_cap_total = Decimal(0)
+        pre_cap_total = gross = Decimal(0)
 
     withheld = (gross * withhold_rate).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
-
-    return StudentMonthPayout(
-        basis_type=basis_type,
-        pre_cap_total=pre_cap_total,
-        gross=gross,
-        withheld=withheld,
-        basis_entries=basis_entries,
-    )
+    return StudentMonthPayout(basis_type, pre_cap_total, gross, withheld, projects, awards)
 
 
 def format_basis_text(payout: StudentMonthPayout) -> str:
     if payout.basis_type == "project":
-        entry = payout.basis_entries[0]
-        base = f"«{entry.project_name}»"
-        if entry.regalia:
-            base += f", {entry.regalia}"
-        return base
+        return "; ".join(f"«{p.name}»" + (f", {p.regalia}" if p.regalia else "") for p in payout.projects)
     if payout.basis_type == "conf_event":
-        parts = []
-        for e in payout.basis_entries:
-            amount = money(e.amount or Decimal(0))
-            if e.type == "conference":
-                parts.append(f"Конференция «{e.conference_name}» ({amount} BYN)")
-            else:
-                parts.append(f"Мероприятие «{e.event_name}» ({amount} BYN)")
-        return "; ".join(parts)
+        return "; ".join(
+            f"{KIND_LABELS.get(a.kind, a.kind)} «{a.event_name}» ({money(a.amount)} BYN)" for a in payout.awards
+        )
     return ""

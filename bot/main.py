@@ -4,16 +4,21 @@ import logging
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ChatType, ParseMode
+from aiogram.fsm.storage.base import BaseEventIsolation
+from aiogram.fsm.storage.memory import SimpleEventIsolation
 
 from bot.config import Config, load_config
-from bot.db.engine import dispose_engine, init_models, session_scope
+from bot.db.engine import dispose_engine, init_database, session_scope
+from bot.db.fsm_storage import DatabaseStorage
 from bot.handlers import (
-    admin_approval,
+    admin_cards,
+    admin_catalog,
     admin_commands,
     admin_management,
     admin_panel,
-    admin_project_entry,
     admin_reports,
+    admin_requests,
+    admin_students,
     common,
     fallback,
     registration,
@@ -33,28 +38,33 @@ ROUTERS = [
     registration.router,
     student_cabinet.router,
     admin_panel.router,
-    admin_approval.router,
-    admin_project_entry.router,
-    admin_management.router,
+    admin_cards.router,
+    admin_requests.router,
+    admin_students.router,
+    admin_catalog.router,
     admin_reports.router,
+    admin_management.router,
     fallback.router,
 ]
 
-# Routers whose buttons sit on the chat's "screen" message (approval cards and fallback are excluded).
+# Routers whose buttons sit on the chat's "screen" message (pushed request cards and fallback are excluded).
 SCREEN_ROUTERS = [
     common.router,
     registration.router,
     student_cabinet.router,
     admin_panel.router,
-    admin_project_entry.router,
-    admin_management.router,
+    admin_requests.router,
+    admin_students.router,
+    admin_catalog.router,
     admin_reports.router,
+    admin_management.router,
 ]
 
 
-def create_dispatcher(config: Config) -> Dispatcher:
+def create_dispatcher(config: Config, events_isolation: BaseEventIsolation | None = None) -> Dispatcher:
     """Build the dispatcher. Routers are module-level singletons, so call this once per process."""
-    dp = Dispatcher()
+    # One update per user at a time: a double tap can't run a confirm step twice.
+    dp = Dispatcher(storage=DatabaseStorage(), events_isolation=events_isolation or SimpleEventIsolation())
     dp["config"] = config
 
     dp.message.filter(F.chat.type == ChatType.PRIVATE)
@@ -71,7 +81,7 @@ def create_dispatcher(config: Config) -> Dispatcher:
 async def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     config = load_config()
-    await init_models(config.db_path)
+    await init_database(config.db_path)
 
     bot = Bot(token=config.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = create_dispatcher(config)
@@ -79,7 +89,8 @@ async def main() -> None:
     await set_default_commands(bot)
     async with session_scope() as session:
         await sync_all_admin_commands(bot, session, config)
-    await bot.delete_webhook(drop_pending_updates=True)
+    # Keep updates sent while the bot was down: forms are persisted, so they can continue.
+    await bot.delete_webhook(drop_pending_updates=False)
 
     try:
         await dp.start_polling(bot)

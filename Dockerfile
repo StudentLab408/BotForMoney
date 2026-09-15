@@ -12,6 +12,8 @@ RUN useradd --create-home --uid 1000 bot
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
+COPY alembic.ini ./
+COPY migrations ./migrations
 COPY bot ./bot
 
 RUN mkdir -p /app/data && chown bot:bot /app/data

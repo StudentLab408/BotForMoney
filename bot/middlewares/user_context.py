@@ -6,9 +6,12 @@ from aiogram.types import TelegramObject, Update
 
 from bot.config import Config
 from bot.db.repo import users as users_repo
+from bot.utils.texts import ARCHIVED_BLOCKED
 
 
 class UserContextMiddleware(BaseMiddleware):
+    """Loads the current user and their rights; archived users are blocked here before any handler runs."""
+
     def __init__(self, config: Config) -> None:
         self.config = config
 
@@ -29,6 +32,10 @@ class UserContextMiddleware(BaseMiddleware):
         if telegram_id is not None:
             current_user = await users_repo.get_by_telegram_id(data["session"], telegram_id)
 
+        if current_user is not None and current_user.is_archived and telegram_id != self.config.super_admin_id:
+            await self._reply_archived(event, data)
+            return None
+
         # Admin rights require a profile: admin handlers rely on current_user (e.g. reviewer id).
         registered = current_user is not None
         data["current_user"] = current_user
@@ -36,3 +43,10 @@ class UserContextMiddleware(BaseMiddleware):
         data["is_admin"] = data["is_super_admin"] or (registered and current_user.role == "admin")
 
         return await handler(event, data)
+
+    @staticmethod
+    async def _reply_archived(event: Update, data: dict[str, Any]) -> None:
+        if event.callback_query is not None:
+            await event.callback_query.answer(ARCHIVED_BLOCKED, show_alert=True)
+        elif event.message is not None and event.message.chat.type == "private":
+            await data["bot"].send_message(event.message.chat.id, ARCHIVED_BLOCKED)

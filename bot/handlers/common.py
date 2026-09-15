@@ -60,6 +60,11 @@ async def cmd_help(message: Message, state: FSMContext, bot: Bot, current_user: 
     await show_screen(state, bot, message.chat.id, text, markup, new=True)
 
 
+@router.callback_query(F.data == "noop")
+async def cb_noop(callback: CallbackQuery) -> None:
+    await callback.answer()
+
+
 @router.callback_query(F.data.in_({"menu:main", "flow:cancel"}))
 async def cb_main_menu(
     callback: CallbackQuery, state: FSMContext, bot: Bot, current_user: User | None, is_admin: bool

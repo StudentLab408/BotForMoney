@@ -21,7 +21,7 @@ from bot.templates.header_template import (
     TOTAL_LABEL,
 )
 from bot.utils.format import money
-from bot.utils.time import month_name
+from bot.utils.time import period_title
 
 
 @dataclass
@@ -63,7 +63,7 @@ def _fill_row(cells, values: list[str], widths: list[int], *, bold: bool = False
                 run.bold = bold
 
 
-def build_supplement_docx(year: int, month: int, rows: list[DocRow], *, official: bool) -> io.BytesIO:
+def build_supplement_docx(period: int, rows: list[DocRow], *, official: bool) -> io.BytesIO:
     """official=True: clean list for the university. official=False: internal list with 25% share and basis."""
     columns = OFFICIAL_COLUMNS if official else INTERNAL_COLUMNS
     headers = [header for header, _ in columns]
@@ -78,7 +78,7 @@ def build_supplement_docx(year: int, month: int, rows: list[DocRow], *, official
         paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
     doc.add_paragraph()
-    purpose = doc.add_paragraph(PURPOSE_TEMPLATE.format(month_name=month_name(month), year=year))
+    purpose = doc.add_paragraph(PURPOSE_TEMPLATE.format(period_title=period_title(period)))
     purpose.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
     doc.add_paragraph()
 

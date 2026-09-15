@@ -1,154 +1,191 @@
+"""Conference/event requests and awards. Status changes are conditional updates, so two admins can't both act."""
+
 import datetime as dt
 from decimal import Decimal
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.db.models import Supplement, SupplementNotification
 
-
-async def create_project(
-    session: AsyncSession,
-    student_id: int,
-    admin_id: int,
-    project_name: str,
-    regalia: str,
-    amount: Decimal,
-    period_year: int,
-    period_month: int,
-) -> Supplement:
-    supplement = Supplement(
-        student_id=student_id,
-        type="project",
-        status="approved",
-        period_year=period_year,
-        period_month=period_month,
-        amount=amount,
-        project_name=project_name,
-        regalia=regalia,
-        submitted_by=admin_id,
-        reviewed_by=admin_id,
-        reviewed_at=dt.datetime.now(dt.UTC),
-    )
-    session.add(supplement)
-    await session.commit()
-    await session.refresh(supplement)
-    return supplement
+OPEN_STATUSES = ("pending", "approved")
 
 
-async def create_conference(
-    session: AsyncSession,
-    student_id: int,
-    conference_name: str,
-    project_name: str,
-    period_year: int,
-    period_month: int,
-) -> Supplement:
-    supplement = Supplement(
-        student_id=student_id,
-        type="conference",
-        status="pending",
-        period_year=period_year,
-        period_month=period_month,
-        amount=None,
-        conference_name=conference_name,
-        project_name=project_name,
-        submitted_by=student_id,
-    )
-    session.add(supplement)
-    await session.commit()
-    await session.refresh(supplement)
-    return supplement
-
-
-async def create_event(
-    session: AsyncSession,
-    student_id: int,
-    event_name: str,
-    what_did: str,
-    period_year: int,
-    period_month: int,
-) -> Supplement:
-    supplement = Supplement(
-        student_id=student_id,
-        type="event",
-        status="pending",
-        period_year=period_year,
-        period_month=period_month,
-        amount=None,
-        event_name=event_name,
-        what_did=what_did,
-        submitted_by=student_id,
-    )
-    session.add(supplement)
-    await session.commit()
-    await session.refresh(supplement)
-    return supplement
+def _now() -> dt.datetime:
+    return dt.datetime.now(dt.UTC)
 
 
 async def get(session: AsyncSession, supplement_id: int) -> Supplement | None:
-    return await session.get(Supplement, supplement_id)
+    return await session.get(Supplement, supplement_id, populate_existing=True)
 
 
-async def approve(session: AsyncSession, supplement_id: int, amount: Decimal, admin_id: int) -> bool:
-    """Atomically approve a pending supplement, setting its amount. Returns False if already handled."""
+async def has_open_request(session: AsyncSession, student_id: int, event_id: int) -> bool:
     result = await session.execute(
-        update(Supplement)
-        .where(Supplement.id == supplement_id, Supplement.status == "pending")
-        .values(
-            status="approved",
-            amount=amount,
-            reviewed_by=admin_id,
-            reviewed_at=dt.datetime.now(dt.UTC),
+        select(Supplement.id).where(
+            Supplement.student_id == student_id,
+            Supplement.event_id == event_id,
+            Supplement.status.in_(OPEN_STATUSES),
         )
+    )
+    return result.first() is not None
+
+
+async def create_request(
+    session: AsyncSession,
+    student_id: int,
+    event_id: int,
+    *,
+    project_name: str | None,
+    what_did: str | None,
+) -> Supplement:
+    supplement = Supplement(
+        student_id=student_id,
+        event_id=event_id,
+        project_name=project_name,
+        what_did=what_did,
+        status="pending",
+        submitted_by=student_id,
+    )
+    session.add(supplement)
+    await session.commit()
+    return await get(session, supplement.id)
+
+
+async def create_award(
+    session: AsyncSession,
+    student_id: int,
+    event_id: int,
+    *,
+    project_name: str | None,
+    what_did: str | None,
+    amount: Decimal,
+    period: int,
+    admin_id: int,
+) -> Supplement:
+    """An award added by an admin directly — approved at once."""
+    supplement = Supplement(
+        student_id=student_id,
+        event_id=event_id,
+        project_name=project_name,
+        what_did=what_did,
+        status="approved",
+        amount=amount,
+        period=period,
+        submitted_by=admin_id,
+        reviewed_by=admin_id,
+        reviewed_at=_now(),
+    )
+    session.add(supplement)
+    await session.commit()
+    return await get(session, supplement.id)
+
+
+async def _transition(session: AsyncSession, supplement_id: int, from_status: str, **values: object) -> bool:
+    result = await session.execute(
+        update(Supplement).where(Supplement.id == supplement_id, Supplement.status == from_status).values(**values)
     )
     await session.commit()
     return result.rowcount > 0
+
+
+async def approve(session: AsyncSession, supplement_id: int, amount: Decimal, period: int, admin_id: int) -> bool:
+    return await _transition(
+        session,
+        supplement_id,
+        "pending",
+        status="approved",
+        amount=amount,
+        period=period,
+        reviewed_by=admin_id,
+        reviewed_at=_now(),
+    )
 
 
 async def reject(session: AsyncSession, supplement_id: int, admin_id: int, reason: str | None) -> bool:
-    result = await session.execute(
-        update(Supplement)
-        .where(Supplement.id == supplement_id, Supplement.status == "pending")
-        .values(
-            status="rejected",
-            reviewed_by=admin_id,
-            reviewed_at=dt.datetime.now(dt.UTC),
-            reject_reason=reason,
-        )
+    return await _transition(
+        session,
+        supplement_id,
+        "pending",
+        status="rejected",
+        reviewed_by=admin_id,
+        reviewed_at=_now(),
+        reject_reason=reason,
     )
-    await session.commit()
-    return result.rowcount > 0
 
 
-async def list_approved_for_month(session: AsyncSession, period_year: int, period_month: int) -> list[Supplement]:
+async def withdraw(session: AsyncSession, supplement_id: int) -> bool:
+    return await _transition(session, supplement_id, "pending", status="withdrawn", withdrawn_at=_now())
+
+
+async def cancel(session: AsyncSession, supplement_id: int, admin_id: int, reason: str | None) -> bool:
+    return await _transition(
+        session,
+        supplement_id,
+        "approved",
+        status="cancelled",
+        cancelled_by=admin_id,
+        cancelled_at=_now(),
+        cancel_reason=reason,
+    )
+
+
+async def change_amount(session: AsyncSession, supplement_id: int, amount: Decimal) -> bool:
+    return await _transition(session, supplement_id, "approved", amount=amount)
+
+
+async def list_pending(session: AsyncSession) -> list[Supplement]:
     result = await session.execute(
-        select(Supplement).where(
-            Supplement.period_year == period_year,
-            Supplement.period_month == period_month,
-            Supplement.status == "approved",
-        )
+        select(Supplement).where(Supplement.status == "pending").order_by(Supplement.created_at, Supplement.id)
     )
     return list(result.scalars().all())
 
 
-async def list_for_student(session: AsyncSession, student_id: int, limit: int) -> list[Supplement]:
+async def count_pending(session: AsyncSession) -> int:
+    return (await session.execute(select(func.count()).where(Supplement.status == "pending"))).scalar_one()
+
+
+async def list_pending_for_student(session: AsyncSession, student_id: int) -> list[Supplement]:
+    result = await session.execute(
+        select(Supplement).where(Supplement.student_id == student_id, Supplement.status == "pending")
+    )
+    return list(result.scalars().all())
+
+
+async def list_approved_for_period(session: AsyncSession, period: int) -> list[Supplement]:
+    result = await session.execute(
+        select(Supplement).where(Supplement.status == "approved", Supplement.period == period)
+    )
+    return list(result.scalars().all())
+
+
+async def list_for_student(session: AsyncSession, student_id: int) -> list[Supplement]:
     result = await session.execute(
         select(Supplement)
         .where(Supplement.student_id == student_id)
         .order_by(Supplement.created_at.desc(), Supplement.id.desc())
-        .limit(limit)
     )
     return list(result.scalars().all())
 
 
-async def list_student_activity_types(session: AsyncSession) -> dict[int, set[str]]:
-    """All-time map of student_id -> set of supplement types ever submitted (any status)."""
-    result = await session.execute(select(Supplement.student_id, Supplement.type).distinct())
-    activity: dict[int, set[str]] = {}
-    for student_id, type_ in result.all():
-        activity.setdefault(student_id, set()).add(type_)
-    return activity
+async def list_for_event(session: AsyncSession, event_id: int) -> list[Supplement]:
+    result = await session.execute(
+        select(Supplement)
+        .where(Supplement.event_id == event_id, Supplement.status == "approved")
+        .order_by(Supplement.period)
+    )
+    return list(result.scalars().all())
+
+
+async def status_counts_by_student(session: AsyncSession) -> dict[int, dict[str, int]]:
+    result = await session.execute(
+        select(Supplement.student_id, Supplement.status, func.count()).group_by(
+            Supplement.student_id, Supplement.status
+        )
+    )
+    counts: dict[int, dict[str, int]] = {}
+    for student_id, status, count in result.all():
+        counts.setdefault(student_id, {})[status] = count
+    return counts
 
 
 async def add_notification(
@@ -156,10 +193,7 @@ async def add_notification(
 ) -> None:
     session.add(
         SupplementNotification(
-            supplement_id=supplement_id,
-            admin_telegram_id=admin_telegram_id,
-            chat_id=chat_id,
-            message_id=message_id,
+            supplement_id=supplement_id, admin_telegram_id=admin_telegram_id, chat_id=chat_id, message_id=message_id
         )
     )
     await session.commit()

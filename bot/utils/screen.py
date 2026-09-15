@@ -48,18 +48,18 @@ async def show_screen(
     if screen_id is not None and not new:
         try:
             await bot.edit_message_text(text, chat_id=chat_id, message_id=screen_id, reply_markup=reply_markup)
-            await ui.set_data({"screen_id": screen_id})
+            await ui.update_data(screen_id=screen_id, extra_ids=[])
             return
         except TelegramBadRequest as error:
             if "message is not modified" in str(error):
-                await ui.set_data({"screen_id": screen_id})
+                await ui.update_data(screen_id=screen_id, extra_ids=[])
                 return
             logger.debug("Screen %s not editable, re-sending: %s", screen_id, error)
 
     if screen_id is not None:
         await delete_message(bot, chat_id, screen_id)
     sent = await bot.send_message(chat_id, text, reply_markup=reply_markup)
-    await ui.set_data({"screen_id": sent.message_id})
+    await ui.update_data(screen_id=sent.message_id, extra_ids=[])
 
 
 async def show_long_screen(
@@ -85,7 +85,7 @@ async def show_long_screen(
 
     extra_ids = [(await bot.send_message(chat_id, chunk)).message_id for chunk in chunks[:-1]]
     sent = await bot.send_message(chat_id, chunks[-1], reply_markup=reply_markup)
-    await ui.set_data({"screen_id": sent.message_id, "extra_ids": extra_ids})
+    await ui.update_data(screen_id=sent.message_id, extra_ids=extra_ids)
 
 
 async def adopt_screen(state: FSMContext, bot: Bot, chat_id: int, message_id: int) -> None:
@@ -97,4 +97,13 @@ async def adopt_screen(state: FSMContext, bot: Bot, chat_id: int, message_id: in
     await _drop_extras(bot, chat_id, data)
     if data.get("screen_id") is not None:
         await delete_message(bot, chat_id, data["screen_id"])
-    await ui.set_data({"screen_id": message_id})
+    await ui.update_data(screen_id=message_id, extra_ids=[])
+
+
+async def remember(state: FSMContext, **values: object) -> None:
+    """Store navigation context (e.g. which list to return to) that survives state.clear()."""
+    await _ui_context(state).update_data(**values)
+
+
+async def recall(state: FSMContext, name: str, default: object = None) -> object:
+    return (await _ui_context(state).get_data()).get(name, default)
