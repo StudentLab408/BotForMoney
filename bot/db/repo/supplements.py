@@ -71,6 +71,7 @@ async def create_award(
     amount: Decimal,
     period: int,
     admin_id: int,
+    admin_name: str,
 ) -> Supplement | None:
     """An award added by an admin directly — approved at once."""
     supplement = Supplement(
@@ -83,6 +84,7 @@ async def create_award(
         period=period,
         submitted_by=admin_id,
         reviewed_by=admin_id,
+        reviewed_by_name=admin_name,
         reviewed_at=_now(),
     )
     return await _insert_open(session, supplement)
@@ -96,7 +98,9 @@ async def _transition(session: AsyncSession, supplement_id: int, from_status: st
     return result.rowcount > 0
 
 
-async def approve(session: AsyncSession, supplement_id: int, amount: Decimal, period: int, admin_id: int) -> bool:
+async def approve(
+    session: AsyncSession, supplement_id: int, amount: Decimal, period: int, admin_id: int, admin_name: str
+) -> bool:
     return await _transition(
         session,
         supplement_id,
@@ -105,17 +109,19 @@ async def approve(session: AsyncSession, supplement_id: int, amount: Decimal, pe
         amount=amount,
         period=period,
         reviewed_by=admin_id,
+        reviewed_by_name=admin_name,
         reviewed_at=_now(),
     )
 
 
-async def reject(session: AsyncSession, supplement_id: int, admin_id: int, reason: str | None) -> bool:
+async def reject(session: AsyncSession, supplement_id: int, admin_id: int, admin_name: str, reason: str | None) -> bool:
     return await _transition(
         session,
         supplement_id,
         "pending",
         status="rejected",
         reviewed_by=admin_id,
+        reviewed_by_name=admin_name,
         reviewed_at=_now(),
         reject_reason=reason,
     )
@@ -125,13 +131,14 @@ async def withdraw(session: AsyncSession, supplement_id: int) -> bool:
     return await _transition(session, supplement_id, "pending", status="withdrawn", withdrawn_at=_now())
 
 
-async def cancel(session: AsyncSession, supplement_id: int, admin_id: int, reason: str | None) -> bool:
+async def cancel(session: AsyncSession, supplement_id: int, admin_id: int, admin_name: str, reason: str | None) -> bool:
     return await _transition(
         session,
         supplement_id,
         "approved",
         status="cancelled",
         cancelled_by=admin_id,
+        cancelled_by_name=admin_name,
         cancelled_at=_now(),
         cancel_reason=reason,
     )

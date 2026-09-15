@@ -44,7 +44,7 @@ async def update_fields(session: AsyncSession, event: Event, **fields: object) -
     await session.commit()
 
 
-async def merge(session: AsyncSession, source: Event, target: Event, admin_id: int) -> int:
+async def merge(session: AsyncSession, source: Event, target: Event, admin_id: int, admin_name: str) -> int:
     """Move every request of a duplicate entry to the target and archive the duplicate.
 
     A student with open requests in both entries would be paid twice for the same event, so their request
@@ -71,6 +71,7 @@ async def merge(session: AsyncSession, source: Event, target: Event, admin_id: i
         if supplement.status == "approved":
             supplement.status = "cancelled"
             supplement.cancelled_by = admin_id
+            supplement.cancelled_by_name = admin_name
             supplement.cancelled_at = now
             supplement.cancel_reason = f"Дубль: объединено с «{target.name}»"
         else:

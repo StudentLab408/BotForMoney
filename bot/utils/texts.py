@@ -111,6 +111,7 @@ CARD_PROCESSED_APPROVED = "\n\n✅ <b>Одобрено, {amount} BYN</b> — {ad
 CARD_PROCESSED_REJECTED = "\n\n❌ <b>Отклонено</b> — {admin_name}, {date}{reason_part}"
 CARD_WITHDRAWN = "\n\n↩️ <b>Отозвана студентом</b> — {date}"
 CARD_STUDENT_ARCHIVED = "\n\n🗄 <b>Студент перенесён в архив</b> — {date}"
+CARD_DELETED = "\n\n🗑 <b>Заявка удалена</b> — {date}"
 CARD_ALREADY_PROCESSED_ALERT = "⚠️ Заявка уже обработана."
 INVALID_AMOUNT_ALERT = "⚠️ Некорректная сумма."
 APPROVED_ALERT = "✅ Одобрено"
@@ -182,6 +183,30 @@ ARCHIVE_CONFIRM = (
 ARCHIVED_DONE = "🗄 {name} в архиве."
 UNARCHIVED_DONE = "♻️ {name} возвращён(а) из архива."
 
+DELETE_UNDO_NOTE = (
+    "\n\nОтменить нельзя — вернуть данные можно только из ночной копии базы. "
+    "Чтобы просто скрыть запись, используйте архив."
+)
+DELETE_STUDENT_CONFIRM = (
+    "🗑 <b>Удалить {name} навсегда?</b>\n\n"
+    "Вместе со студентом удалятся заявки и начисления: {supplements} (одобренных — {approved}), "
+    "участия в проектах: {memberships}. Суммы в отчётах и списках за прошлые месяцы изменятся."
+)
+DELETE_ADMIN_NOTE = "\nОтметки о том, кто одобрял заявки других студентов, сохранятся."
+DELETE_PROJECT_CONFIRM = (
+    "🗑 <b>Удалить проект «{name}» навсегда?</b>\n\n"
+    "Вместе с проектом удалятся все участия в нём: {memberships}. "
+    "Проектные надбавки за прошлые месяцы пропадут из отчётов и списков."
+)
+DELETE_EVENT_CONFIRM = (
+    "🗑 <b>Удалить «{name}» навсегда?</b>\n\n"
+    "Вместе с записью удалятся все заявки и начисления по ней: {supplements} (одобренных — {approved}). "
+    "Суммы в отчётах и списках за прошлые месяцы изменятся."
+)
+STUDENT_DELETED = "🗑 {name} удалён(а)."
+PROJECT_DELETED = "🗑 Проект «{name}» удалён."
+EVENT_DELETED = "🗑 «{name}» удалено."
+
 # --- Admin: catalogs ----------------------------------------------------------------------------------------------
 
 PROJECTS_TITLE = "📁 <b>Проекты</b>: {count}"
@@ -230,3 +255,5 @@ BACK_BUTTON = "⬅️ Назад"
 MAIN_MENU_BUTTON = "⬅️ В главное меню"
 SEARCH_BUTTON = "🔎 Поиск"
 ADD_NEW_BUTTON = "➕ Добавить новую"
+DELETE_BUTTON = "🗑 Удалить"
+DELETE_CONFIRM_BUTTON = "🗑 Да, удалить навсегда"

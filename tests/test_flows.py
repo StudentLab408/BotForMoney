@@ -444,6 +444,7 @@ async def test_merging_duplicate_events_never_pays_twice(harness):
                 amount=Decimal(50),
                 period=period,
                 admin_id=admin.id,
+                admin_name=admin.full_name,
             )
         original_id, duplicate_id = original.id, duplicate.id
 
@@ -483,6 +484,7 @@ async def test_database_rejects_duplicate_open_requests_and_memberships(harness)
             amount=Decimal(25),
             period=1,
             admin_id=admin.id,
+            admin_name=admin.full_name,
         )
         assert duplicate is None
 
@@ -576,3 +578,124 @@ async def test_groups_list_is_paginated(harness):
     group_callbacks = [cb for t, cb in harness.screen_buttons(SUPER_ADMIN_ID).items() if t.startswith("🎓")]
     await harness.press(SUPER_ADMIN_ID, group_callbacks[-1])
     assert "группа-19" in harness.screen_text(SUPER_ADMIN_ID)
+
+
+async def _count_rows(table: str) -> int:
+    from sqlalchemy import text
+
+    async with db_engine.session_scope() as session:
+        return (await session.execute(text(f"SELECT count(*) FROM {table}"))).scalar_one()
+
+
+async def test_deleting_a_student_needs_confirmation_and_removes_their_history(harness):
+    calls = harness.session
+    await harness.register(SUPER_ADMIN_ID, "Админов")
+    await harness.register(STUDENT_ID, "Удаляемый")
+    await harness.register(OTHER_STUDENT_ID, "Остающийся")
+    await harness.submit_conference_with_new_event(STUDENT_ID, "Конф удаляемого")
+    await harness.submit_conference_with_new_event(OTHER_STUDENT_ID, "Конф остающегося")
+    student = await harness.one(User, telegram_id=STUDENT_ID)
+    [card] = [
+        mid
+        for m, mid in calls.sent
+        if isinstance(m, SendMessage) and m.chat_id == SUPER_ADMIN_ID and "Конф удаляемого" in (m.text or "")
+    ]
+
+    await harness.send(SUPER_ADMIN_ID, "/students")
+    await harness.press(SUPER_ADMIN_ID, f"st:c:{student.id}")
+    assert "🗑 Удалить" in harness.screen_buttons(SUPER_ADMIN_ID)
+    await harness.press(SUPER_ADMIN_ID, f"st:del:{student.id}")
+    assert "навсегда" in harness.screen_text(SUPER_ADMIN_ID) and "1 (одобренных — 0)" in harness.screen_text(
+        SUPER_ADMIN_ID
+    )
+    assert await harness.one(User, id=student.id) is not None, "nothing is deleted before confirmation"
+
+    await harness.press(SUPER_ADMIN_ID, f"st:dely:{student.id}")
+
+    assert await harness.one(User, id=student.id) is None
+    remaining = await harness.all(Supplement)
+    assert [s.student.telegram_id for s in remaining] == [OTHER_STUDENT_ID]
+    assert await _count_rows("supplement_notifications") == 1
+    assert await _count_rows(f"fsm_records WHERE key LIKE '%:{STUDENT_ID}:{STUDENT_ID}:%'") == 0
+    assert any(e.message_id == card and "Заявка удалена" in e.text for e in calls.of(EditMessageText))
+    assert "удалён(а)" in harness.screen_text(SUPER_ADMIN_ID)
+
+
+async def test_deleting_an_admin_keeps_who_approved_other_students(harness):
+    await harness.register(SUPER_ADMIN_ID, "Суперов")
+    await harness.register(STUDENT_ID, "Проверяющий")
+    await harness.register(OTHER_STUDENT_ID, "Студентов")
+    reviewer = await harness.one(User, telegram_id=STUDENT_ID)
+    async with db_engine.session_scope() as session:
+        stored = await session.get(User, reviewer.id)
+        stored.role = "admin"
+        await session.commit()
+
+    await harness.submit_conference_with_new_event(OTHER_STUDENT_ID, "Конф")
+    [supplement] = await harness.all(Supplement)
+    await harness.send(STUDENT_ID, "/requests")
+    await harness.press(STUDENT_ID, f"rq:o:{supplement.id}")
+    await harness.press(STUDENT_ID, f"rq:ok:{supplement.id}:25")
+
+    await harness.send(SUPER_ADMIN_ID, "/students")
+    await harness.press(SUPER_ADMIN_ID, f"st:del:{reviewer.id}")
+    await harness.press(SUPER_ADMIN_ID, f"st:dely:{reviewer.id}")
+
+    supplement = await harness.one(Supplement, id=supplement.id)
+    assert supplement.status == "approved" and supplement.reviewed_by is None
+    assert supplement.reviewed_by_name == "Проверяющий Имя Отчество"
+    await harness.press(SUPER_ADMIN_ID, f"st:a:{supplement.id}")
+    assert "Одобрил(а): Проверяющий Имя Отчество" in harness.screen_text(SUPER_ADMIN_ID)
+
+
+async def test_regular_admin_cannot_delete_an_admin(harness):
+    await harness.register(SUPER_ADMIN_ID, "Суперов")
+    await harness.register(STUDENT_ID, "Админов")
+    await harness.register(OTHER_STUDENT_ID, "Второвадминов")
+    for telegram_id in (STUDENT_ID, OTHER_STUDENT_ID):
+        user = await harness.one(User, telegram_id=telegram_id)
+        async with db_engine.session_scope() as session:
+            stored = await session.get(User, user.id)
+            stored.role = "admin"
+            await session.commit()
+    other_admin = await harness.one(User, telegram_id=OTHER_STUDENT_ID)
+
+    await harness.send(STUDENT_ID, "/students")
+    await harness.press(STUDENT_ID, f"st:c:{other_admin.id}")
+    assert "🗑 Удалить" not in harness.screen_buttons(STUDENT_ID)
+    await harness.press(STUDENT_ID, f"st:dely:{other_admin.id}")
+    assert await harness.one(User, id=other_admin.id) is not None
+
+
+async def test_deleting_project_and_event_removes_their_records(harness):
+    await harness.register(SUPER_ADMIN_ID, "Админов")
+    await harness.register(STUDENT_ID, "Студентов")
+    student = await harness.one(User, telegram_id=STUDENT_ID)
+    period = current_period(CONFIG.timezone)
+
+    await harness.send(SUPER_ADMIN_ID, "/projects")
+    await harness.press(SUPER_ADMIN_ID, "pj:new")
+    await harness.send(SUPER_ADMIN_ID, "RoboArm")
+    await harness.press(SUPER_ADMIN_ID, "pj:skip")
+    project = await harness.one(Project, name="RoboArm")
+    await harness.press(SUPER_ADMIN_ID, f"pj:as:{project.id}:{student.id}")
+    async with db_engine.session_scope() as session:
+        assert len(await build_month_details(session, CONFIG, period)) == 1
+
+    await harness.press(SUPER_ADMIN_ID, f"pj:del:{project.id}")
+    assert "участия в нём: 1" in harness.screen_text(SUPER_ADMIN_ID)
+    await harness.press(SUPER_ADMIN_ID, f"pj:dely:{project.id}")
+    assert await harness.one(Project, id=project.id) is None
+    assert await _count_rows("project_members") == 0
+
+    await harness.submit_conference_with_new_event(STUDENT_ID, "Конф")
+    [supplement] = await harness.all(Supplement)
+    await harness.send(SUPER_ADMIN_ID, "/events")
+    await harness.press(SUPER_ADMIN_ID, f"ev:o:{supplement.event_id}")
+    await harness.press(SUPER_ADMIN_ID, f"ev:del:{supplement.event_id}")
+    await harness.press(SUPER_ADMIN_ID, f"ev:dely:{supplement.event_id}")
+    assert await harness.one(Event, id=supplement.event_id) is None
+    assert await harness.all(Supplement) == []
+    assert await _count_rows("supplement_notifications") == 0
+    async with db_engine.session_scope() as session:
+        assert await build_month_details(session, CONFIG, period) == []

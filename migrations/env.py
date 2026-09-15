@@ -28,14 +28,16 @@ def run_migrations_online() -> None:
     def _begin(connection) -> None:
         connection.exec_driver_sql("BEGIN")
 
-    with engine.connect() as connection:
-        # Batch mode is required for ALTER TABLE on SQLite.
-        context.configure(
-            connection=connection, target_metadata=target_metadata, render_as_batch=True, transactional_ddl=True
-        )
-        with context.begin_transaction():
-            context.run_migrations()
-    engine.dispose()
+    try:
+        with engine.connect() as connection:
+            # Batch mode is required for ALTER TABLE on SQLite.
+            context.configure(
+                connection=connection, target_metadata=target_metadata, render_as_batch=True, transactional_ddl=True
+            )
+            with context.begin_transaction():
+                context.run_migrations()
+    finally:
+        engine.dispose()
 
 
 if context.is_offline_mode():

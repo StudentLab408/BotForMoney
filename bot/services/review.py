@@ -19,6 +19,7 @@ from bot.db.repo import supplements as supplements_repo
 from bot.db.repo import users as users_repo
 from bot.utils.format import h, money
 from bot.utils.texts import (
+    CARD_DELETED,
     CARD_PROCESSED_APPROVED,
     CARD_PROCESSED_REJECTED,
     CARD_STUDENT_ARCHIVED,
@@ -74,6 +75,19 @@ def status_text(supplement: Supplement) -> str:
     return {"pending": "⏳ На рассмотрении", "withdrawn": "↩️ Отозвана"}[supplement.status]
 
 
+def decision_lines(supplement: Supplement, config: Config) -> list[str]:
+    """Who decided and when — kept even if that admin's account was deleted."""
+    lines = []
+    if supplement.reviewed_by_name and supplement.reviewed_at:
+        verb = "Отклонил(а)" if supplement.status == "rejected" else "Одобрил(а)"
+        when = format_datetime(supplement.reviewed_at, config.timezone)
+        lines.append(f"👤 {verb}: {h(supplement.reviewed_by_name)} · {when}")
+    if supplement.cancelled_by_name and supplement.cancelled_at:
+        when = format_datetime(supplement.cancelled_at, config.timezone)
+        lines.append(f"👤 Отменил(а): {h(supplement.cancelled_by_name)} · {when}")
+    return lines
+
+
 def _now_str(config: Config) -> str:
     return format_datetime(dt.datetime.now(dt.UTC), config.timezone)
 
@@ -110,6 +124,16 @@ async def _stamp_cards(bot: Bot, session: AsyncSession, config: Config, suppleme
             logger.warning("Could not update card %s for admin %s", supplement.id, note.admin_telegram_id)
 
 
+async def stamp_deleted_requests(
+    bot: Bot, session: AsyncSession, config: Config, supplement_ids: tuple[int, ...]
+) -> None:
+    """Call before deleting pending requests, so admins' cards lose their buttons."""
+    for supplement_id in supplement_ids:
+        supplement = await supplements_repo.get(session, supplement_id)
+        if supplement is not None:
+            await _stamp_cards(bot, session, config, supplement, CARD_DELETED.format(date=_now_str(config)))
+
+
 def _reason_part(reason: str | None) -> str:
     return REASON_PART.format(reason=h(reason)) if reason else ""
 
@@ -118,7 +142,9 @@ async def approve_request(
     bot: Bot, session: AsyncSession, config: Config, supplement_id: int, amount: Decimal, admin: User
 ) -> bool:
     """Approve into the current month (the month of approval). False if someone already decided."""
-    if not await supplements_repo.approve(session, supplement_id, amount, current_period(config.timezone), admin.id):
+    if not await supplements_repo.approve(
+        session, supplement_id, amount, current_period(config.timezone), admin.id, admin.full_name
+    ):
         return False
     supplement = await supplements_repo.get(session, supplement_id)
     if not supplement.event.is_verified:
@@ -134,7 +160,7 @@ async def approve_request(
 async def reject_request(
     bot: Bot, session: AsyncSession, config: Config, supplement_id: int, admin: User, reason: str | None
 ) -> bool:
-    if not await supplements_repo.reject(session, supplement_id, admin.id, reason):
+    if not await supplements_repo.reject(session, supplement_id, admin.id, admin.full_name, reason):
         return False
     supplement = await supplements_repo.get(session, supplement_id)
     suffix = CARD_PROCESSED_REJECTED.format(
@@ -158,7 +184,7 @@ async def withdraw_request(
 
 
 async def cancel_award(bot: Bot, session: AsyncSession, supplement_id: int, admin: User, reason: str | None) -> bool:
-    if not await supplements_repo.cancel(session, supplement_id, admin.id, reason):
+    if not await supplements_repo.cancel(session, supplement_id, admin.id, admin.full_name, reason):
         return False
     supplement = await supplements_repo.get(session, supplement_id)
     text = STUDENT_NOTIFY_CANCELLED.format(title=h(supplement.event.name), reason_part=_reason_part(reason))

@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.config import Config
 from bot.db.models import ProjectMember, Supplement, User
+from bot.db.repo import deletion as deletion_repo
 from bot.db.repo import events as events_repo
 from bot.db.repo import projects as projects_repo
 from bot.db.repo import supplements as supplements_repo
@@ -48,6 +49,11 @@ from bot.utils.texts import (
     CARD_ALREADY_PROCESSED_ALERT,
     CONFIRM_BUTTON,
     CONFIRM_END_MEMBERSHIP,
+    DELETE_ADMIN_NOTE,
+    DELETE_BUTTON,
+    DELETE_CONFIRM_BUTTON,
+    DELETE_STUDENT_CONFIRM,
+    DELETE_UNDO_NOTE,
     FILTER_LABELS,
     GROUPS_TITLE,
     INVALID_DATE,
@@ -66,6 +72,7 @@ from bot.utils.texts import (
     ROLE_DEMOTED,
     ROLE_PROMOTED,
     SKIP_BUTTON,
+    STUDENT_DELETED,
     STUDENT_HISTORY_EMPTY,
     STUDENT_HISTORY_TITLE,
     STUDENT_NOTIFY_AWARD,
@@ -95,8 +102,8 @@ def _membership_span(member: ProjectMember) -> str:
     return f"{format_period(member.start_period)}–{format_period(member.end_period - 1)}"
 
 
-def _can_archive(user: User, viewer_is_super_admin: bool, config: Config) -> bool:
-    """Archiving removes admin rights, so only the super-admin may archive an admin; the super-admin never."""
+def _can_remove(user: User, viewer_is_super_admin: bool, config: Config) -> bool:
+    """Archiving/deleting removes admin rights: only the super-admin may do it to an admin, and never to themselves."""
     if user.telegram_id == config.super_admin_id:
         return False
     return viewer_is_super_admin or user.role != "admin"
@@ -289,6 +296,7 @@ async def show_student_card(
         text = f"{notice}\n\n{text}"
 
     active = not user.is_archived
+    can_remove = _can_remove(user, viewer_is_super_admin, config)
     keyboard = markup(
         [button("📜 Вся история", f"st:h:{user.id}:0")],
         [button("📁 В проект", f"st:pj:{user.id}:0")]
@@ -301,10 +309,9 @@ async def show_student_card(
         [button("👑 Снять админа" if user.role == "admin" else "👑 Сделать админом", f"st:role:{user.id}")]
         if viewer_is_super_admin and active and not is_super_admin_user
         else None,
-        [button("🗄 В архив", f"st:ar:{user.id}")]
-        if active and _can_archive(user, viewer_is_super_admin, config)
-        else None,
-        [button("♻️ Вернуть из архива", f"st:unar:{user.id}")] if not active else None,
+        ([button("🗄 В архив", f"st:ar:{user.id}")] if active and can_remove else [])
+        + ([button("♻️ Вернуть из архива", f"st:unar:{user.id}")] if not active else [])
+        + ([button(DELETE_BUTTON, f"st:del:{user.id}")] if can_remove else []),
         [button("⬅️ К списку", "st:back")],
     )
     await show_long_screen(state, bot, chat_id, text, keyboard)
@@ -371,7 +378,8 @@ async def show_award(
     notice: str | None = None,
 ) -> None:
     await state.clear()
-    text = review.request_card_text(supplement, config) + "\n\n" + review.status_text(supplement)
+    lines = [review.request_card_text(supplement, config), "", review.status_text(supplement)]
+    text = "\n".join(lines + review.decision_lines(supplement, config))
     if notice:
         text = f"{notice}\n\n{text}"
     keyboard = markup(
@@ -833,6 +841,7 @@ async def cb_award_confirm(
         amount=amount,
         period=current_period(config.timezone),
         admin_id=current_user.id,
+        admin_name=current_user.full_name,
     )
     if award is None:
         notice = SUBMISSION_DUPLICATE.format(name=h(event.name))
@@ -883,7 +892,7 @@ async def cb_archive_ask(
     callback: CallbackQuery, state: FSMContext, bot: Bot, session: AsyncSession, config: Config, is_super_admin: bool
 ) -> None:
     user = await users_repo.get(session, _uid(callback))
-    if user is None or user.is_archived or not _can_archive(user, is_super_admin, config):
+    if user is None or user.is_archived or not _can_remove(user, is_super_admin, config):
         await callback.answer(ACTION_EXPIRED, show_alert=True)
         return
     keyboard = markup([button("🗄 Да, в архив", f"st:ary:{user.id}"), button(BACK_BUTTON, f"st:c:{user.id}")])
@@ -902,7 +911,7 @@ async def cb_archive(
     is_super_admin: bool,
 ) -> None:
     user = await users_repo.get(session, _uid(callback))
-    if user is None or user.is_archived or not _can_archive(user, is_super_admin, config):
+    if user is None or user.is_archived or not _can_remove(user, is_super_admin, config):
         await callback.answer(ACTION_EXPIRED, show_alert=True)
         return
     await callback.answer()
@@ -934,3 +943,45 @@ async def cb_unarchive(
     await show_student_card(
         state, bot, callback.message.chat.id, session, config, user.id, is_super_admin, notice=notice
     )
+
+
+@router.callback_query(F.data.regexp(r"^st:del:\d+$"))
+async def cb_delete_ask(
+    callback: CallbackQuery, state: FSMContext, bot: Bot, session: AsyncSession, config: Config, is_super_admin: bool
+) -> None:
+    user = await users_repo.get(session, _uid(callback))
+    if user is None or not _can_remove(user, is_super_admin, config):
+        await callback.answer(ACTION_EXPIRED, show_alert=True)
+        return
+    impact = await deletion_repo.user_impact(session, user)
+    text = DELETE_STUDENT_CONFIRM.format(
+        name=h(user.full_name),
+        supplements=impact.supplements,
+        approved=impact.approved,
+        memberships=impact.memberships,
+    )
+    if user.role == "admin":
+        text += DELETE_ADMIN_NOTE
+    keyboard = markup([button(DELETE_CONFIRM_BUTTON, f"st:dely:{user.id}")], [button(BACK_BUTTON, f"st:c:{user.id}")])
+    await show_screen(state, bot, callback.message.chat.id, text + DELETE_UNDO_NOTE, keyboard)
+    await callback.answer()
+
+
+@router.callback_query(F.data.regexp(r"^st:dely:\d+$"))
+async def cb_delete(
+    callback: CallbackQuery, state: FSMContext, bot: Bot, session: AsyncSession, config: Config, is_super_admin: bool
+) -> None:
+    user = await users_repo.get(session, _uid(callback))
+    if user is None or not _can_remove(user, is_super_admin, config):
+        await callback.answer(ACTION_EXPIRED, show_alert=True)
+        return
+    await callback.answer()
+    impact = await deletion_repo.user_impact(session, user)
+    await review.stamp_deleted_requests(bot, session, config, impact.pending_ids)
+    name, telegram_id, was_admin = user.full_name, user.telegram_id, user.role == "admin"
+    await deletion_repo.delete_user(session, user)
+    if was_admin:
+        await sync_role_commands(bot, telegram_id, is_admin=False, config=config)
+    view = str(await recall(state, "students_view", "all.0"))
+    notice = STUDENT_DELETED.format(name=h(name))
+    await show_students(state, bot, callback.message.chat.id, session, config, view, notice=notice)

@@ -1,4 +1,4 @@
-"""Database schema. Nothing is ever hard-deleted: records change status or get archived instead."""
+"""Database schema. Records are archived or change status; hard deletion happens only on explicit admin confirmation."""
 
 import datetime as dt
 from decimal import Decimal
@@ -105,11 +105,14 @@ class Supplement(TimestampMixin, Base):
     amount: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
     period: Mapped[int | None] = mapped_column(index=True)  # month of approval
 
-    submitted_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    # User references become NULL if that user is deleted; the *_name columns keep who decided.
+    submitted_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     reviewed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    reviewed_by_name: Mapped[str | None] = mapped_column(String(300))
     reviewed_at: Mapped[dt.datetime | None] = mapped_column(DateTime)
     reject_reason: Mapped[str | None] = mapped_column(Text)
     cancelled_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    cancelled_by_name: Mapped[str | None] = mapped_column(String(300))
     cancelled_at: Mapped[dt.datetime | None] = mapped_column(DateTime)
     cancel_reason: Mapped[str | None] = mapped_column(Text)
     withdrawn_at: Mapped[dt.datetime | None] = mapped_column(DateTime)

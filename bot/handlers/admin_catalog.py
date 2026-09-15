@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.config import Config
 from bot.db.models import User
+from bot.db.repo import deletion as deletion_repo
 from bot.db.repo import events as events_repo
 from bot.db.repo import projects as projects_repo
 from bot.db.repo import supplements as supplements_repo
@@ -17,6 +18,7 @@ from bot.filters.roles import IsAdmin
 from bot.handlers.admin_students import add_to_project, end_project_membership
 from bot.keyboards.builders import button, markup, page_slice, pagination_row, short
 from bot.keyboards.events import event_button_text
+from bot.services import review
 from bot.states.admin import EventForm, ProjectForm
 from bot.utils.format import h, money
 from bot.utils.input import MAX_DESCRIPTION_LEN, MAX_TITLE_LEN, read_input, take_state_data
@@ -31,6 +33,12 @@ from bot.utils.texts import (
     BACK_BUTTON,
     CANCEL_BUTTON,
     CODE_BY_KIND,
+    DELETE_BUTTON,
+    DELETE_CONFIRM_BUTTON,
+    DELETE_EVENT_CONFIRM,
+    DELETE_PROJECT_CONFIRM,
+    DELETE_UNDO_NOTE,
+    EVENT_DELETED,
     EVENT_MERGE_CONFIRM,
     EVENT_MERGE_DUPLICATES,
     EVENT_MERGE_PICK,
@@ -45,6 +53,7 @@ from bot.utils.texts import (
     PICK_STUDENT_FOR_PROJECT,
     PROJECT_ARCHIVE_CONFIRM,
     PROJECT_ARCHIVED,
+    PROJECT_DELETED,
     PROJECT_RESTORED,
     PROJECT_SAVED,
     PROJECTS_TITLE,
@@ -65,7 +74,14 @@ def _id(callback: CallbackQuery, index: int = 2) -> int:
 
 
 async def show_projects(
-    state: FSMContext, bot: Bot, chat_id: int, session: AsyncSession, page: int = 0, *, new: bool = False
+    state: FSMContext,
+    bot: Bot,
+    chat_id: int,
+    session: AsyncSession,
+    page: int = 0,
+    *,
+    notice: str | None = None,
+    new: bool = False,
 ) -> None:
     await state.clear()
     projects = await projects_repo.list_all(session)
@@ -77,6 +93,8 @@ async def show_projects(
         for p in items
     ]
     text = PROJECTS_TITLE.format(count=len(projects)) + ("" if projects else f"\n\n{NOTHING_FOUND}")
+    if notice:
+        text = f"{notice}\n\n{text}"
     keyboard = markup(
         *rows,
         pagination_row(page, pages, lambda p: f"pj:l:{p}"),
@@ -119,7 +137,10 @@ async def show_project(
         if active
         else None,
         [button("✏️ Название", f"pj:ren:{project.id}"), button("🏅 Регалии", f"pj:reg:{project.id}")],
-        [button("🗄 В архив", f"pj:ar:{project.id}") if active else button("♻️ Восстановить", f"pj:unar:{project.id}")],
+        [
+            button("🗄 В архив", f"pj:ar:{project.id}") if active else button("♻️ Восстановить", f"pj:unar:{project.id}"),
+            button(DELETE_BUTTON, f"pj:del:{project.id}"),
+        ],
         [button("⬅️ К проектам", f"pj:l:{await recall(state, 'projects_page', 0)}")],
     )
     await show_long_screen(state, bot, chat_id, text, keyboard)
@@ -329,7 +350,15 @@ async def cb_project_archive(
 
 
 async def show_events(
-    state: FSMContext, bot: Bot, chat_id: int, session: AsyncSession, kind: str, page: int = 0, *, new: bool = False
+    state: FSMContext,
+    bot: Bot,
+    chat_id: int,
+    session: AsyncSession,
+    kind: str,
+    page: int = 0,
+    *,
+    notice: str | None = None,
+    new: bool = False,
 ) -> None:
     await state.clear()
     events = await events_repo.list_for_kind(session, kind, verified_only=False, include_archived=True)
@@ -339,6 +368,8 @@ async def show_events(
     words = KIND_TEXT[kind]
     other = "event" if kind == "conference" else "conference"
     text = EVENTS_TITLE.format(icon=words["icon"], plural=words["plural"], count=len(events))
+    if notice:
+        text = f"{notice}\n\n{text}"
     keyboard = markup(
         *[[button(event_button_text(e), f"ev:o:{e.id}")] for e in items],
         pagination_row(page, pages, lambda p: f"ev:l:{code}:{p}"),
@@ -380,7 +411,8 @@ async def show_event(
         [
             button("🗄 В архив", f"ev:ar:{event.id}")
             if not event.is_archived
-            else button("♻️ Восстановить", f"ev:unar:{event.id}")
+            else button("♻️ Восстановить", f"ev:unar:{event.id}"),
+            button(DELETE_BUTTON, f"ev:del:{event.id}"),
         ],
         [button(BACK_BUTTON, f"ev:l:{code}:{await recall(state, 'events_page', 0)}")],
     )
@@ -522,8 +554,72 @@ async def cb_event_merge(
         )
         await show_screen(state, bot, callback.message.chat.id, text, keyboard)
         return
-    closed = await events_repo.merge(session, source, target, current_user.id)
+    closed = await events_repo.merge(session, source, target, current_user.id, current_user.full_name)
     notice = EVENT_MERGED.format(name=h(target.name))
     if closed:
         notice += EVENT_MERGE_DUPLICATES.format(count=closed)
     await show_event(state, bot, callback.message.chat.id, session, target.id, notice)
+
+
+# --- Deletion -----------------------------------------------------------------------------------------------------
+
+
+@router.callback_query(F.data.regexp(r"^pj:del:\d+$"))
+async def cb_project_delete_ask(callback: CallbackQuery, state: FSMContext, bot: Bot, session: AsyncSession) -> None:
+    project = await projects_repo.get(session, _id(callback))
+    if project is None:
+        await callback.answer(ACTION_EXPIRED, show_alert=True)
+        return
+    impact = await deletion_repo.project_impact(session, project)
+    text = DELETE_PROJECT_CONFIRM.format(name=h(project.name), memberships=impact.memberships) + DELETE_UNDO_NOTE
+    keyboard = markup(
+        [button(DELETE_CONFIRM_BUTTON, f"pj:dely:{project.id}")], [button(BACK_BUTTON, f"pj:o:{project.id}")]
+    )
+    await show_screen(state, bot, callback.message.chat.id, text, keyboard)
+    await callback.answer()
+
+
+@router.callback_query(F.data.regexp(r"^pj:dely:\d+$"))
+async def cb_project_delete(callback: CallbackQuery, state: FSMContext, bot: Bot, session: AsyncSession) -> None:
+    project = await projects_repo.get(session, _id(callback))
+    if project is None:
+        await callback.answer(ACTION_EXPIRED, show_alert=True)
+        return
+    await callback.answer()
+    name = project.name
+    await deletion_repo.delete_project(session, project)
+    page = await recall(state, "projects_page", 0)
+    await show_projects(
+        state, bot, callback.message.chat.id, session, page, notice=PROJECT_DELETED.format(name=h(name))
+    )
+
+
+@router.callback_query(F.data.regexp(r"^ev:del:\d+$"))
+async def cb_event_delete_ask(callback: CallbackQuery, state: FSMContext, bot: Bot, session: AsyncSession) -> None:
+    event = await events_repo.get(session, _id(callback))
+    if event is None:
+        await callback.answer(ACTION_EXPIRED, show_alert=True)
+        return
+    impact = await deletion_repo.event_impact(session, event)
+    text = DELETE_EVENT_CONFIRM.format(name=h(event.name), supplements=impact.supplements, approved=impact.approved)
+    keyboard = markup([button(DELETE_CONFIRM_BUTTON, f"ev:dely:{event.id}")], [button(BACK_BUTTON, f"ev:o:{event.id}")])
+    await show_screen(state, bot, callback.message.chat.id, text + DELETE_UNDO_NOTE, keyboard)
+    await callback.answer()
+
+
+@router.callback_query(F.data.regexp(r"^ev:dely:\d+$"))
+async def cb_event_delete(
+    callback: CallbackQuery, state: FSMContext, bot: Bot, session: AsyncSession, config: Config
+) -> None:
+    event = await events_repo.get(session, _id(callback))
+    if event is None:
+        await callback.answer(ACTION_EXPIRED, show_alert=True)
+        return
+    await callback.answer()
+    impact = await deletion_repo.event_impact(session, event)
+    await review.stamp_deleted_requests(bot, session, config, impact.pending_ids)
+    name, kind = event.name, event.kind
+    await deletion_repo.delete_event(session, event)
+    page = await recall(state, "events_page", 0)
+    notice = EVENT_DELETED.format(name=h(name))
+    await show_events(state, bot, callback.message.chat.id, session, kind, page, notice=notice)
