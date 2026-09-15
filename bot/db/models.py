@@ -3,7 +3,7 @@
 import datetime as dt
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, Index, Numeric, String, Text, false, func
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, Index, Numeric, String, Text, false, func, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -67,6 +67,13 @@ class ProjectMember(Base):
     project: Mapped[Project] = relationship(lazy="joined")
     user: Mapped[User] = relationship(foreign_keys=[user_id], lazy="joined")
 
+    # A student can be a current member of a project only once.
+    __table_args__ = (
+        Index(
+            "uq_project_members_current", "project_id", "user_id", unique=True, sqlite_where=text("end_period IS NULL")
+        ),
+    )
+
 
 class Event(TimestampMixin, Base):
     """Catalog of conferences and events. Student-added entries stay hidden until a request with them is approved."""
@@ -110,7 +117,17 @@ class Supplement(TimestampMixin, Base):
     event: Mapped[Event] = relationship(lazy="joined")
     student: Mapped[User] = relationship(foreign_keys=[student_id], lazy="joined")
 
-    __table_args__ = (Index("ix_supplements_status_period", "status", "period"),)
+    __table_args__ = (
+        Index("ix_supplements_status_period", "status", "period"),
+        # At most one open (pending or approved) request per student and event: no double payment.
+        Index(
+            "uq_supplements_open_per_event",
+            "student_id",
+            "event_id",
+            unique=True,
+            sqlite_where=text("status IN ('pending', 'approved')"),
+        ),
+    )
 
 
 class SupplementNotification(Base):

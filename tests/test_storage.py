@@ -6,6 +6,7 @@ from contextlib import closing
 
 import pytest
 from alembic import command
+from alembic.script import ScriptDirectory
 
 from bot.db.engine import alembic_config, dispose_engine, init_database
 from bot.services.backup import backup_database
@@ -34,6 +35,10 @@ def test_backup_copies_database_and_prunes_old_copies(tmp_path):
     with closing(sqlite3.connect(target)) as conn:
         assert conn.execute("SELECT v FROM t").fetchall() == [("kept",)]
     assert sorted(p.name for p in backup_dir.iterdir()) == ["nadbavki_2026-09-10.db", "nadbavki_2026-09-15.db"]
+
+
+def _head(db_path) -> str:
+    return ScriptDirectory.from_config(alembic_config(str(db_path))).get_current_head()
 
 
 def _tables(db_path) -> set[str]:
@@ -68,7 +73,7 @@ async def test_database_created_without_migrations_is_moved_aside(tmp_path):
     with closing(sqlite3.connect(old)) as conn:
         assert conn.execute("SELECT telegram_id FROM users").fetchall() == [(42,)]
     with closing(sqlite3.connect(db_path)) as conn:
-        assert conn.execute("SELECT version_num FROM alembic_version").fetchall() == [("0001",)]
+        assert conn.execute("SELECT version_num FROM alembic_version").fetchall() == [(_head(db_path),)]
 
 
 async def test_migrated_database_is_left_in_place(tmp_path):
@@ -78,3 +83,33 @@ async def test_migrated_database_is_left_in_place(tmp_path):
     await init_database(str(db_path))
     await dispose_engine()
     assert [p.name for p in tmp_path.iterdir() if "pre-migrations" in p.name] == []
+
+
+def test_unique_index_migration_closes_existing_duplicates(tmp_path):
+    db_path = tmp_path / "dups.db"
+    config = alembic_config(str(db_path))
+    command.upgrade(config, "0001")
+    with closing(sqlite3.connect(db_path)) as conn:
+        conn.execute(
+            "INSERT INTO users (id, telegram_id, last_name, first_name, middle_name, group_number, role) "
+            "VALUES (1, 1, 'A', 'B', 'C', 'g', 'student')"
+        )
+        conn.execute("INSERT INTO events (id, kind, name, held_on) VALUES (1, 'conference', 'C', '2026-09-01')")
+        conn.execute("INSERT INTO projects (id, name) VALUES (1, 'P')")
+        rows = [(1, "pending"), (2, "approved"), (3, "approved"), (4, "rejected")]
+        for supplement_id, status in rows:
+            conn.execute(
+                "INSERT INTO supplements (id, student_id, event_id, status, submitted_by) VALUES (?, 1, 1, ?, 1)",
+                (supplement_id, status),
+            )
+        conn.execute("INSERT INTO project_members (id, project_id, user_id, start_period) VALUES (1, 1, 1, 100)")
+        conn.execute("INSERT INTO project_members (id, project_id, user_id, start_period) VALUES (2, 1, 1, 101)")
+        conn.commit()
+
+    command.upgrade(config, "head")
+
+    with closing(sqlite3.connect(db_path)) as conn:
+        statuses = dict(conn.execute("SELECT id, status FROM supplements"))
+        members = dict(conn.execute("SELECT id, end_period FROM project_members"))
+    assert statuses == {1: "withdrawn", 2: "approved", 3: "cancelled", 4: "rejected"}
+    assert members == {1: None, 2: 101}

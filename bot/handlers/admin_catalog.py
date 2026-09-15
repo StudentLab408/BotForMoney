@@ -32,6 +32,7 @@ from bot.utils.texts import (
     CANCEL_BUTTON,
     CODE_BY_KIND,
     EVENT_MERGE_CONFIRM,
+    EVENT_MERGE_DUPLICATES,
     EVENT_MERGE_PICK,
     EVENT_MERGED,
     EVENT_SAVED,
@@ -499,11 +500,20 @@ async def cb_event_merge_pick(callback: CallbackQuery, state: FSMContext, bot: B
 
 
 @router.callback_query(F.data.regexp(r"^ev:(ms|my):\d+:\d+$"))
-async def cb_event_merge(callback: CallbackQuery, state: FSMContext, bot: Bot, session: AsyncSession) -> None:
+async def cb_event_merge(
+    callback: CallbackQuery, state: FSMContext, bot: Bot, session: AsyncSession, current_user: User
+) -> None:
     await callback.answer()
     source = await events_repo.get(session, _id(callback))
     target = await events_repo.get(session, _id(callback, 3))
-    if source is None or target is None or source.is_archived:
+    if (
+        source is None
+        or target is None
+        or source.id == target.id
+        or source.is_archived
+        or target.is_archived
+        or source.kind != target.kind
+    ):
         return
     if callback.data.split(":")[1] == "ms":
         text = EVENT_MERGE_CONFIRM.format(source=h(source.name), target=h(target.name))
@@ -512,5 +522,8 @@ async def cb_event_merge(callback: CallbackQuery, state: FSMContext, bot: Bot, s
         )
         await show_screen(state, bot, callback.message.chat.id, text, keyboard)
         return
-    await events_repo.merge(session, source, target)
-    await show_event(state, bot, callback.message.chat.id, session, target.id, EVENT_MERGED.format(name=h(target.name)))
+    closed = await events_repo.merge(session, source, target, current_user.id)
+    notice = EVENT_MERGED.format(name=h(target.name))
+    if closed:
+        notice += EVENT_MERGE_DUPLICATES.format(count=closed)
+    await show_event(state, bot, callback.message.chat.id, session, target.id, notice)

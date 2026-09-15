@@ -16,7 +16,7 @@ from bot.db.repo import users as users_repo
 from bot.filters.roles import IsAdmin
 from bot.handlers.admin_requests import parse_amount
 from bot.keyboards.admin import amount_row
-from bot.keyboards.builders import button, markup, page_slice, pagination_row, short
+from bot.keyboards.builders import PAGE_SIZE, button, markup, page_slice, pagination_row, short
 from bot.keyboards.events import event_picker_keyboard
 from bot.services import review
 from bot.services.commands import sync_role_commands
@@ -93,6 +93,13 @@ def _membership_span(member: ProjectMember) -> str:
     if member.end_period <= member.start_period:
         return "не оплачивался"
     return f"{format_period(member.start_period)}–{format_period(member.end_period - 1)}"
+
+
+def _can_archive(user: User, viewer_is_super_admin: bool, config: Config) -> bool:
+    """Archiving removes admin rights, so only the super-admin may archive an admin; the super-admin never."""
+    if user.telegram_id == config.super_admin_id:
+        return False
+    return viewer_is_super_admin or user.role != "admin"
 
 
 def _markers(user: User, stats: StudentStats, config: Config) -> str:
@@ -177,7 +184,7 @@ async def show_students(
         *rows,
         pagination_row(page, pages, lambda p: f"st:v:{prefix}.{p}"),
         *filters,
-        [button("🎓 Группы", "st:groups"), button("🔎 Поиск", "st:search")],
+        [button("🎓 Группы", "st:groups:0"), button("🔎 Поиск", "st:search")],
         [button(BACK_BUTTON, "menu:admin")],
     )
     await show_long_screen(state, bot, chat_id, text, keyboard, new=new)
@@ -200,12 +207,17 @@ async def cb_students_back(
     await show_students(state, bot, callback.message.chat.id, session, config, view)
 
 
-@router.callback_query(F.data == "st:groups")
+@router.callback_query(F.data.regexp(r"^st:groups:\d+$"))
 async def cb_groups(callback: CallbackQuery, state: FSMContext, bot: Bot, session: AsyncSession) -> None:
     groups = await users_repo.list_groups(session)
-    rows = [[button(f"🎓 {short(group)}", f"st:v:grp.{i}.0")] for i, group in enumerate(groups)]
-    keyboard = markup(*rows, [button(BACK_BUTTON, "st:back")])
-    await show_long_screen(state, bot, callback.message.chat.id, GROUPS_TITLE if groups else NOTHING_FOUND, keyboard)
+    items, page, pages = page_slice(groups, _uid(callback))
+    offset = page * PAGE_SIZE
+    keyboard = markup(
+        *[[button(f"🎓 {short(group)}", f"st:v:grp.{offset + i}.0")] for i, group in enumerate(items)],
+        pagination_row(page, pages, lambda p: f"st:groups:{p}"),
+        [button(BACK_BUTTON, "st:back")],
+    )
+    await show_screen(state, bot, callback.message.chat.id, GROUPS_TITLE if groups else NOTHING_FOUND, keyboard)
     await callback.answer()
 
 
@@ -289,13 +301,10 @@ async def show_student_card(
         [button("👑 Снять админа" if user.role == "admin" else "👑 Сделать админом", f"st:role:{user.id}")]
         if viewer_is_super_admin and active and not is_super_admin_user
         else None,
-        [
-            button(
-                "🗄 В архив" if active else "♻️ Вернуть из архива", f"st:ar:{user.id}" if active else f"st:unar:{user.id}"
-            )
-        ]
-        if not is_super_admin_user
+        [button("🗄 В архив", f"st:ar:{user.id}")]
+        if active and _can_archive(user, viewer_is_super_admin, config)
         else None,
+        [button("♻️ Вернуть из архива", f"st:unar:{user.id}")] if not active else None,
         [button("⬅️ К списку", "st:back")],
     )
     await show_long_screen(state, bot, chat_id, text, keyboard)
@@ -797,6 +806,9 @@ async def cb_award_confirm(
     chat_id = callback.message.chat.id
     user = await users_repo.get(session, data["user_id"])
     amount = parse_amount(data["amount"])
+    if user is None or user.is_archived:
+        await show_students(state, bot, chat_id, session, config, notice=ACTION_EXPIRED)
+        return
 
     if data.get("event_id"):
         event = await events_repo.get(session, data["event_id"])
@@ -812,7 +824,7 @@ async def cb_award_confirm(
             session, data["kind"], data["new_event_name"], held_on, current_user.id, verified=True
         )
 
-    await supplements_repo.create_award(
+    award = await supplements_repo.create_award(
         session,
         user.id,
         event.id,
@@ -822,6 +834,10 @@ async def cb_award_confirm(
         period=current_period(config.timezone),
         admin_id=current_user.id,
     )
+    if award is None:
+        notice = SUBMISSION_DUPLICATE.format(name=h(event.name))
+        await show_student_card(state, bot, chat_id, session, config, user.id, is_super_admin, notice=notice)
+        return
     await review.notify(bot, user.telegram_id, STUDENT_NOTIFY_AWARD.format(amount=money(amount), title=h(event.name)))
     notice = AWARD_DONE.format(amount=money(amount), event=h(event.name))
     await show_student_card(state, bot, chat_id, session, config, user.id, is_super_admin, notice=notice)
@@ -864,10 +880,10 @@ async def cb_role_apply(
 
 @router.callback_query(F.data.regexp(r"^st:ar:\d+$"))
 async def cb_archive_ask(
-    callback: CallbackQuery, state: FSMContext, bot: Bot, session: AsyncSession, config: Config
+    callback: CallbackQuery, state: FSMContext, bot: Bot, session: AsyncSession, config: Config, is_super_admin: bool
 ) -> None:
     user = await users_repo.get(session, _uid(callback))
-    if user is None or user.is_archived or user.telegram_id == config.super_admin_id:
+    if user is None or user.is_archived or not _can_archive(user, is_super_admin, config):
         await callback.answer(ACTION_EXPIRED, show_alert=True)
         return
     keyboard = markup([button("🗄 Да, в архив", f"st:ary:{user.id}"), button(BACK_BUTTON, f"st:c:{user.id}")])
@@ -886,7 +902,7 @@ async def cb_archive(
     is_super_admin: bool,
 ) -> None:
     user = await users_repo.get(session, _uid(callback))
-    if user is None or user.is_archived or user.telegram_id == config.super_admin_id:
+    if user is None or user.is_archived or not _can_archive(user, is_super_admin, config):
         await callback.answer(ACTION_EXPIRED, show_alert=True)
         return
     await callback.answer()

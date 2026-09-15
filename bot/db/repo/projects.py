@@ -1,6 +1,7 @@
 import datetime as dt
 
 from sqlalchemy import or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.db.models import Project, ProjectMember
@@ -87,7 +88,11 @@ async def add_member(
         return None
     member = ProjectMember(project_id=project_id, user_id=user_id, start_period=period, added_by=added_by)
     session.add(member)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:  # another admin added them at the same moment
+        await session.rollback()
+        return None
     return await get_member(session, member.id)
 
 

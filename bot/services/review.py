@@ -167,6 +167,9 @@ async def cancel_award(bot: Bot, session: AsyncSession, supplement_id: int, admi
 
 
 async def change_award_amount(bot: Bot, session: AsyncSession, supplement_id: int, amount: Decimal) -> bool:
+    current = await supplements_repo.get(session, supplement_id)
+    if current is not None and current.status == "approved" and current.amount == amount:
+        return True
     if not await supplements_repo.change_amount(session, supplement_id, amount):
         return False
     supplement = await supplements_repo.get(session, supplement_id)

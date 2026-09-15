@@ -388,5 +388,8 @@ async def cb_submit_confirm(
         project_name=data.get("project_name"),
         what_did=data.get("what_did"),
     )
+    if supplement is None:
+        await show_main_menu(state, bot, chat_id, is_admin, notice=SUBMISSION_DUPLICATE.format(name=h(event.name)))
+        return
     await review.send_request_to_admins(bot, session, config, supplement, request_card_keyboard(supplement.id))
     await show_main_menu(state, bot, chat_id, is_admin, notice=SUBMISSION_SENT)

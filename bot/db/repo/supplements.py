@@ -4,6 +4,7 @@ import datetime as dt
 from decimal import Decimal
 
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.db.models import Supplement, SupplementNotification
@@ -30,6 +31,17 @@ async def has_open_request(session: AsyncSession, student_id: int, event_id: int
     return result.first() is not None
 
 
+async def _insert_open(session: AsyncSession, supplement: Supplement) -> Supplement | None:
+    """Insert an open request/award. None if the student already has an open one for this event."""
+    session.add(supplement)
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        return None
+    return await get(session, supplement.id)
+
+
 async def create_request(
     session: AsyncSession,
     student_id: int,
@@ -37,7 +49,7 @@ async def create_request(
     *,
     project_name: str | None,
     what_did: str | None,
-) -> Supplement:
+) -> Supplement | None:
     supplement = Supplement(
         student_id=student_id,
         event_id=event_id,
@@ -46,9 +58,7 @@ async def create_request(
         status="pending",
         submitted_by=student_id,
     )
-    session.add(supplement)
-    await session.commit()
-    return await get(session, supplement.id)
+    return await _insert_open(session, supplement)
 
 
 async def create_award(
@@ -61,7 +71,7 @@ async def create_award(
     amount: Decimal,
     period: int,
     admin_id: int,
-) -> Supplement:
+) -> Supplement | None:
     """An award added by an admin directly — approved at once."""
     supplement = Supplement(
         student_id=student_id,
@@ -75,9 +85,7 @@ async def create_award(
         reviewed_by=admin_id,
         reviewed_at=_now(),
     )
-    session.add(supplement)
-    await session.commit()
-    return await get(session, supplement.id)
+    return await _insert_open(session, supplement)
 
 
 async def _transition(session: AsyncSession, supplement_id: int, from_status: str, **values: object) -> bool:

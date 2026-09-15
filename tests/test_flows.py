@@ -22,6 +22,7 @@ from aiogram.methods import (
 from aiogram.types import CallbackQuery, Chat, Message, Update
 from aiogram.types import User as TgUser
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from bot.config import Config
 from bot.db import engine as db_engine
@@ -414,3 +415,164 @@ async def test_unknown_message_is_removed_and_unregistered_super_admin_has_no_ri
 
     await harness.press(SUPER_ADMIN_ID, "sup:approve:1:50", old_screen)
     assert calls.of(AnswerCallbackQuery)[-1].show_alert
+
+
+async def test_merging_duplicate_events_never_pays_twice(harness):
+    await harness.register(SUPER_ADMIN_ID, "Админов")
+    await harness.register(STUDENT_ID, "Студентов")
+    student = await harness.one(User, telegram_id=STUDENT_ID)
+    admin = await harness.one(User, telegram_id=SUPER_ADMIN_ID)
+    period = current_period(CONFIG.timezone)
+
+    async with db_engine.session_scope() as session:
+        from bot.db.repo import events as events_repo
+        from bot.db.repo import supplements as supplements_repo
+
+        original = await events_repo.create(
+            session, "conference", "IEEE 2026", dt.date(2026, 9, 1), admin.id, verified=True
+        )
+        duplicate = await events_repo.create(
+            session, "conference", "IEEE-2026", dt.date(2026, 9, 1), admin.id, verified=False
+        )
+        for event in (original, duplicate):
+            await supplements_repo.create_award(
+                session,
+                student.id,
+                event.id,
+                project_name=None,
+                what_did=None,
+                amount=Decimal(50),
+                period=period,
+                admin_id=admin.id,
+            )
+        original_id, duplicate_id = original.id, duplicate.id
+
+    await harness.send(SUPER_ADMIN_ID, "/events")
+    await harness.press(SUPER_ADMIN_ID, f"ev:o:{duplicate_id}")
+    await harness.press(SUPER_ADMIN_ID, f"ev:ms:{duplicate_id}:{original_id}")
+    await harness.press(SUPER_ADMIN_ID, f"ev:my:{duplicate_id}:{original_id}")
+
+    statuses = sorted(s.status for s in await harness.all(Supplement))
+    assert statuses == ["approved", "cancelled"]
+    assert "Закрыто дублей: 1" in harness.screen_text(SUPER_ADMIN_ID)
+    async with db_engine.session_scope() as session:
+        [detail] = await build_month_details(session, CONFIG, period)
+    assert detail.payout.gross == Decimal(50)
+
+
+async def test_database_rejects_duplicate_open_requests_and_memberships(harness):
+    await harness.register(SUPER_ADMIN_ID, "Админов")
+    await harness.register(STUDENT_ID, "Студентов")
+    student = await harness.one(User, telegram_id=STUDENT_ID)
+    admin = await harness.one(User, telegram_id=SUPER_ADMIN_ID)
+
+    async with db_engine.session_scope() as session:
+        from bot.db.repo import events as events_repo
+        from bot.db.repo import projects as projects_repo
+        from bot.db.repo import supplements as supplements_repo
+
+        event = await events_repo.create(session, "event", "Хакатон", dt.date(2026, 9, 1), admin.id, verified=True)
+        assert await supplements_repo.create_request(session, student.id, event.id, project_name=None, what_did="x")
+        # Bypasses the handler pre-check, like an admin award racing with the student's request.
+        duplicate = await supplements_repo.create_award(
+            session,
+            student.id,
+            event.id,
+            project_name=None,
+            what_did=None,
+            amount=Decimal(25),
+            period=1,
+            admin_id=admin.id,
+        )
+        assert duplicate is None
+
+        project = await projects_repo.create(session, "Robo", None, admin.id)
+        assert await projects_repo.add_member(session, project.id, student.id, 1, admin.id)
+        session.add(ProjectMember(project_id=project.id, user_id=student.id, start_period=1, added_by=admin.id))
+        with pytest.raises(IntegrityError):
+            await session.commit()
+        await session.rollback()
+
+    assert len(await harness.all(Supplement)) == 1
+
+
+async def test_regular_admin_cannot_archive_another_admin(harness):
+    await harness.register(SUPER_ADMIN_ID, "Суперов")
+    await harness.register(STUDENT_ID, "Админов")
+    await harness.register(OTHER_STUDENT_ID, "Второвадминов")
+    for telegram_id in (STUDENT_ID, OTHER_STUDENT_ID):
+        user = await harness.one(User, telegram_id=telegram_id)
+        async with db_engine.session_scope() as session:
+            stored = await session.get(User, user.id)
+            stored.role = "admin"
+            await session.commit()
+    other_admin = await harness.one(User, telegram_id=OTHER_STUDENT_ID)
+
+    await harness.send(STUDENT_ID, "/students")
+    await harness.press(STUDENT_ID, f"st:c:{other_admin.id}")
+    assert "🗄 В архив" not in harness.screen_buttons(STUDENT_ID)
+    await harness.press(STUDENT_ID, f"st:ary:{other_admin.id}")  # stale or forged button
+    assert not (await harness.one(User, id=other_admin.id)).is_archived
+
+    await harness.send(SUPER_ADMIN_ID, "/students")
+    await harness.press(SUPER_ADMIN_ID, f"st:c:{other_admin.id}")
+    assert "🗄 В архив" in harness.screen_buttons(SUPER_ADMIN_ID)
+
+
+async def test_award_is_not_created_for_a_student_archived_meanwhile(harness):
+    await harness.register(SUPER_ADMIN_ID, "Админов")
+    await harness.register(STUDENT_ID, "Студентов")
+    student = await harness.one(User, telegram_id=STUDENT_ID)
+
+    await harness.send(SUPER_ADMIN_ID, "/students")
+    await harness.press(SUPER_ADMIN_ID, f"st:c:{student.id}")
+    await harness.press(SUPER_ADMIN_ID, f"st:aw:{student.id}:e")
+    await harness.press(SUPER_ADMIN_ID, "aw:new")
+    await harness.send(SUPER_ADMIN_ID, "Хакатон")
+    await harness.send(SUPER_ADMIN_ID, "01.09.2026")
+    await harness.press(SUPER_ADMIN_ID, "aw:p:-")
+    await harness.press(SUPER_ADMIN_ID, "aw:m:25")
+
+    async with db_engine.session_scope() as session:
+        stored = await session.get(User, student.id)
+        stored.is_archived = True
+        await session.commit()
+
+    await harness.press(SUPER_ADMIN_ID, "aw:y")
+    assert await harness.all(Supplement) == []
+
+
+async def test_choosing_the_same_amount_does_not_notify_the_student(harness):
+    calls = harness.session
+    await harness.register(SUPER_ADMIN_ID, "Админов")
+    await harness.register(STUDENT_ID, "Студентов")
+    await harness.submit_conference_with_new_event(STUDENT_ID, "Конф")
+    [supplement] = await harness.all(Supplement)
+    await harness.send(SUPER_ADMIN_ID, "/requests")
+    await harness.press(SUPER_ADMIN_ID, f"rq:o:{supplement.id}")
+    await harness.press(SUPER_ADMIN_ID, f"rq:ok:{supplement.id}:25")
+
+    notified = len([m for m in calls.of(SendMessage) if m.chat_id == STUDENT_ID])
+    await harness.press(SUPER_ADMIN_ID, f"st:a:{supplement.id}")
+    await harness.press(SUPER_ADMIN_ID, f"st:aca:{supplement.id}:25")
+    assert len([m for m in calls.of(SendMessage) if m.chat_id == STUDENT_ID]) == notified
+
+    await harness.press(SUPER_ADMIN_ID, f"st:aca:{supplement.id}:50")
+    assert "изменена: 50 BYN" in [m for m in calls.of(SendMessage) if m.chat_id == STUDENT_ID][-1].text
+
+
+async def test_groups_list_is_paginated(harness):
+    await harness.register(SUPER_ADMIN_ID, "Админов", group="000")
+    for i in range(20):
+        await harness.register(1000 + i, f"Студент{i}", group=f"группа-{i:02d}")
+
+    await harness.send(SUPER_ADMIN_ID, "/students")
+    await harness.press(SUPER_ADMIN_ID, "st:groups:0")
+    buttons = harness.screen_buttons(SUPER_ADMIN_ID)
+    assert len([t for t in buttons if t.startswith("🎓")]) == 8
+    assert "1/3" in buttons
+
+    await harness.press(SUPER_ADMIN_ID, "st:groups:2")
+    group_callbacks = [cb for t, cb in harness.screen_buttons(SUPER_ADMIN_ID).items() if t.startswith("🎓")]
+    await harness.press(SUPER_ADMIN_ID, group_callbacks[-1])
+    assert "группа-19" in harness.screen_text(SUPER_ADMIN_ID)
